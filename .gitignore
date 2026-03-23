@@ -1,0 +1,33 @@
+# Elixir
+/_build/
+/deps/
+*.beam
+*.ez
+
+# Generated
+/doc/
+/cover/
+
+# Data
+*.db
+*.sqlite
+.env*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.elixir_ls/
+
+# Shazam runtime data
+.shazam/tasks/
+.shazam/context/
+.shazam/memories/
+.shazam/logs/
+.shazam/metrics.json
+.shazam/attachments/
