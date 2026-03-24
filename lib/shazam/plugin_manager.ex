@@ -81,7 +81,7 @@ defmodule Shazam.PluginManager do
         config =
           Enum.find(plugin_configs, %{}, fn pc ->
             pc_name = pc[:name] || pc["name"] || ""
-            Macro.underscore(pc_name) == mod_name
+            normalize(pc_name) == normalize(mod_name)
           end)
 
         plugin_config = config[:config] || config["config"] || %{}
@@ -122,7 +122,7 @@ defmodule Shazam.PluginManager do
           config =
             Enum.find(state.plugin_configs, %{}, fn pc ->
               pc_name = pc[:name] || pc["name"] || ""
-              Macro.underscore(pc_name) == mod_name
+              normalize(pc_name) == normalize(mod_name)
             end)
 
           plugin_config = config[:config] || config["config"] || %{}
@@ -182,6 +182,13 @@ defmodule Shazam.PluginManager do
     _ -> :ok
   catch
     _, _ -> :ok
+  end
+
+  defp normalize(name) do
+    name
+    |> to_string()
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]/, "")
   end
 
   defp event_allowed?(_event, nil), do: true
