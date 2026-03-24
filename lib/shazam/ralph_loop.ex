@@ -468,12 +468,46 @@ defmodule Shazam.RalphLoop do
         all_pending
         |> Enum.reject(fn task -> TaskScheduler.task_blocked?(task) end)
         |> Enum.reject(fn task -> Map.has_key?(state.running, task.id) end)
+        |> Enum.map(fn task -> maybe_auto_assign(task, state) end)
         |> Enum.sort_by(fn task -> task.created_at end, DateTime)  # FIFO: oldest first
 
       locked = if state.module_lock, do: TaskScheduler.locked_module_paths(state.running, state.company_name), else: %{}
 
       TaskScheduler.pick_tasks(candidates, state, locked, available_slots, &execute_task/2)
     end
+    end
+  end
+
+  # Auto-assign tasks with nil/empty/"unassigned" to the top of the hierarchy
+  defp maybe_auto_assign(task, state) do
+    assigned = task.assigned_to
+    if assigned == nil or assigned == "" or assigned == "unassigned" do
+      top_agent = try do
+        agents = Shazam.Company.get_agents(state.company_name)
+        case Enum.find(agents, fn a -> a.supervisor == nil end) do
+          nil -> case agents do
+            [first | _] -> first.name
+            _ -> nil
+          end
+          agent -> agent.name
+        end
+      catch
+        _, _ -> nil
+      end
+
+      if top_agent do
+        # Update in TaskBoard too
+        try do
+          TaskBoard.reassign(task.id, top_agent)
+        catch
+          _, _ -> :ok
+        end
+        %{task | assigned_to: top_agent}
+      else
+        task
+      end
+    else
+      task
     end
   end
 
