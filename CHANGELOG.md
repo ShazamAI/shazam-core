@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.3 (2026-03-24)
+
+### Bug Fixes
+- Auto-assign unassigned tasks to top of hierarchy (Manager/PM)
+- Store data_dir resolved at runtime (fixes permission denied on other machines)
+- FIFO task ordering (oldest tasks execute first)
+- Cursor provider uses `cursor-agent` binary with correct args
+- Gemini provider uses `-p` flag for prompts
+
+### Improvements
+- Rich plan output (summary, architecture, acceptance criteria, risks)
+- Plugin name matching normalized
+
 ## v0.2.0 (2026-03-24)
 
 ### Features
