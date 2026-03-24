@@ -468,6 +468,7 @@ defmodule Shazam.RalphLoop do
         all_pending
         |> Enum.reject(fn task -> TaskScheduler.task_blocked?(task) end)
         |> Enum.reject(fn task -> Map.has_key?(state.running, task.id) end)
+        |> Enum.sort_by(fn task -> task.created_at end, DateTime)  # FIFO: oldest first
 
       locked = if state.module_lock, do: TaskScheduler.locked_module_paths(state.running, state.company_name), else: %{}
 
