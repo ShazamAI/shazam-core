@@ -6,7 +6,10 @@ defmodule ShazamPlugin.GitHubProjects do
 
   use Shazam.Plugin
 
-  @log_path "/tmp/shazam-plugin.log"
+  defp log_path do
+    workspace = Application.get_env(:shazam, :workspace, File.cwd!())
+    Path.join([workspace, ".shazam", "logs", "plugin.log"])
+  end
 
   @impl true
   def on_init(ctx) do
@@ -157,7 +160,9 @@ defmodule ShazamPlugin.GitHubProjects do
   end
 
   defp log(message) do
-    File.write(@log_path, "#{message}\n", [:append])
+    path = log_path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write(path, "#{message}\n", [:append])
   rescue
     _ -> :ok
   end
