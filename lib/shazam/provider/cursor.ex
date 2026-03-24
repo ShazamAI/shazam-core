@@ -1,6 +1,7 @@
 defmodule Shazam.Provider.Cursor do
   @moduledoc """
-  Provider implementation for Cursor CLI.
+  Provider implementation for Cursor Agent CLI.
+  Uses `cursor-agent` binary with prompt as positional argument.
   Stateless — each execution spawns a new CLI process.
   """
 
@@ -18,7 +19,8 @@ defmodule Shazam.Provider.Cursor do
 
   @impl true
   def available? do
-    System.find_executable("cursor") != nil
+    System.find_executable("cursor-agent") != nil or
+      System.find_executable("cursor") != nil
   end
 
   @impl true
@@ -31,30 +33,35 @@ defmodule Shazam.Provider.Cursor do
   def execute(_session, prompt, opts \\ []) do
     agent_name = Keyword.get(opts, :agent_name, "cursor")
     system_prompt = Keyword.get(opts, :system_prompt, "")
+    model = Keyword.get(opts, :model)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     workspace = Keyword.get(opts, :cwd, File.cwd!())
 
-    case System.find_executable("cursor") do
-      nil ->
-        {:error, {:cursor_cli_not_found, "cursor"}}
+    cli_bin = System.find_executable("cursor-agent") || System.find_executable("cursor")
 
-      cli_bin ->
+    case cli_bin do
+      nil ->
+        {:error, {:cursor_cli_not_found, "cursor-agent"}}
+
+      bin ->
         combined_prompt = if system_prompt != "" do
           "#{system_prompt}\n\n#{prompt}"
         else
           prompt
         end
 
-        notify(agent_name, "Starting Cursor execution...")
+        args = [combined_prompt, "--print", "--workspace", workspace, "--force"]
+        args = if model, do: args ++ ["--model", model], else: args
+
+        notify(agent_name, "Starting Cursor Agent execution...")
 
         task = Task.async(fn ->
-          System.cmd(cli_bin, ["--prompt", combined_prompt],
-            stderr_to_stdout: true, cd: workspace)
+          System.cmd(bin, args, stderr_to_stdout: true, cd: workspace)
         end)
 
         case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
           {:ok, {output, 0}} ->
-            notify(agent_name, "Completed via Cursor")
+            notify(agent_name, "Completed via Cursor Agent")
             {:ok, String.trim(output), []}
 
           {:ok, {output, status}} ->

@@ -113,74 +113,144 @@ defmodule Shazam.PlanManager do
 
     #{description}
     #{workspace_context}
-    Analyze the codebase first to understand the current state, then create a phased plan.
 
-    IMPORTANT: Output your plan as a JSON block in this exact format:
+    FIRST, analyze the codebase to understand the current state. Then create a comprehensive plan.
+
+    Your plan MUST include these sections in order:
+
+    1. **Summary** — One paragraph: what will be built, why, and the expected outcome.
+
+    2. **Architecture & Design** — Explain:
+       - File structure: which files will be created, modified, or deleted
+       - How this feature interacts with existing modules
+       - Key technical decisions and WHY (e.g., "Using JWT in httpOnly cookies instead of localStorage for XSS protection")
+       - Data flow: how data moves through the system
+       - Dependencies: external libraries needed (if any)
+
+    3. **Phases with tasks** — Break into ordered phases. Each phase has:
+       - A clear GOAL (what's true when this phase is done)
+       - Tasks with detailed descriptions
+
+    4. **Risks & Assumptions** — What could go wrong, what are we assuming
+
+    Output the plan as a JSON block in this exact format:
 
     ```json
     {
       "title": "Short plan title",
+      "summary": "One paragraph explaining what will be built and why.",
+      "architecture": {
+        "files_created": ["path/to/new_file.ts", "path/to/another.ts"],
+        "files_modified": ["path/to/existing.ts"],
+        "interactions": "Explain how this interacts with existing modules",
+        "decisions": [
+          {"decision": "Use JWT in httpOnly cookies", "reason": "XSS protection"},
+          {"decision": "Supabase Auth for OAuth", "reason": "Already integrated"}
+        ],
+        "dependencies": ["jose", "cookie-parser"]
+      },
       "phases": [
         {
           "name": "Phase 1: Foundation",
+          "goal": "Database schema and core utilities ready and tested",
           "tasks": [
             {
-              "title": "Task description",
+              "title": "Create auth database schema",
               "assigned_to": "agent_name",
               "depends_on": null,
-              "description": "Detailed description of what to do"
-            },
-            {
-              "title": "Another task",
-              "assigned_to": "agent_name",
-              "depends_on": "Task description",
-              "description": "This depends on the first task"
+              "description": "Create migration file at supabase/migrations/001_auth.sql with users table (id, email, password_hash, role, created_at) and refresh_tokens table (id, user_id, token, expires_at). Run migration and verify tables exist.",
+              "files": ["supabase/migrations/001_auth.sql"],
+              "acceptance_criteria": [
+                "Migration runs without errors",
+                "Tables visible in Supabase dashboard",
+                "Foreign key constraint on refresh_tokens.user_id"
+              ],
+              "complexity": "small"
             }
           ]
         },
         {
-          "name": "Phase 2: Features",
+          "name": "Phase 2: Implementation",
+          "goal": "Core feature working end-to-end",
+          "tasks": [...]
+        },
+        {
+          "name": "Phase 3: Testing & Polish",
+          "goal": "All tests passing, edge cases handled",
           "tasks": [...]
         }
+      ],
+      "risks": [
+        {"risk": "OAuth callback URL must be configured", "mitigation": "Document in README"},
+        {"risk": "Rate limiting not included", "mitigation": "Separate task recommended"}
       ]
     }
     ```
 
     Rules:
-    - Use the actual agent names from the company (check /agents)
+    - Use the actual agent names from the company
+    - Each task MUST include: files (list of files to create/modify), acceptance_criteria (list), complexity (small/medium/large)
+    - Be SPECIFIC in descriptions — include exact file paths, function names, expected behavior
     - Set depends_on to the TITLE of the task it depends on, or null if independent
     - Tasks within the same phase CAN run in parallel if they don't depend on each other
-    - Tasks that depend on previous phase tasks MUST have depends_on set
-    - Be specific in descriptions — include file paths, function names, acceptance criteria
-    - Assign tasks based on agent roles (devs implement, QA tests, PM coordinates)
-    - When multiple workspaces/repositories exist, be EXPLICIT about which workspace each task belongs to
-    - Include the full file path relative to the workspace root in task descriptions
-    - Assign agents that have the matching workspace configured
+    - Assign tasks based on agent roles (devs implement, QA tests)
+    - When multiple workspaces exist, specify which workspace each task applies to
+    - Include at least 2-3 acceptance criteria per task
+    - The summary should be useful to a non-technical person
+    - Architecture decisions should explain WHY, not just WHAT
     """
   end
 
   @doc "Parse a plan from the PM's JSON output."
   def parse_plan_from_output(plan_id, output) do
     case extract_json(output) do
-      {:ok, %{"title" => title, "phases" => phases}} ->
+      {:ok, %{"title" => title, "phases" => phases} = plan_data} ->
         tasks = phases
           |> Enum.flat_map(fn phase ->
             phase_name = phase["name"] || "Unknown Phase"
+            phase_goal = phase["goal"] || ""
             (phase["tasks"] || [])
             |> Enum.map(fn t ->
+              # Build rich description with acceptance criteria and files
+              ac = case t["acceptance_criteria"] do
+                criteria when is_list(criteria) and criteria != [] ->
+                  "\n\nAcceptance Criteria:\n" <>
+                  Enum.map_join(criteria, "\n", &"- [ ] #{&1}")
+                _ -> ""
+              end
+
+              files = case t["files"] do
+                f when is_list(f) and f != [] ->
+                  "\n\nFiles: #{Enum.join(f, ", ")}"
+                _ -> ""
+              end
+
+              complexity = if t["complexity"], do: "\nComplexity: #{t["complexity"]}", else: ""
+
+              desc = "#{t["description"] || t["title"]}#{files}#{complexity}#{ac}"
+
               %{
                 title: t["title"],
                 assigned_to: t["assigned_to"],
                 depends_on: t["depends_on"],
-                description: t["description"] || t["title"],
-                phase: phase_name
+                description: desc,
+                phase: phase_name,
+                phase_goal: phase_goal
               }
             end)
           end)
 
+        # Extract rich metadata
+        summary = plan_data["summary"] || ""
+        architecture = plan_data["architecture"] || %{}
+        risks = plan_data["risks"] || []
+
         {:ok, %{
           id: plan_id,
           title: title,
+          summary: summary,
+          architecture: architecture,
+          risks: risks,
           status: "draft",
           tasks: tasks,
           created_at: DateTime.to_iso8601(DateTime.utc_now())

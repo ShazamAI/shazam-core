@@ -1,6 +1,7 @@
 defmodule Shazam.Provider.Gemini do
   @moduledoc """
   Provider implementation for Google Gemini CLI.
+  Uses `gemini` binary with `-p` flag for non-interactive prompts.
   Stateless — each execution spawns a new CLI process.
   """
 
@@ -31,6 +32,7 @@ defmodule Shazam.Provider.Gemini do
   def execute(_session, prompt, opts \\ []) do
     agent_name = Keyword.get(opts, :agent_name, "gemini")
     system_prompt = Keyword.get(opts, :system_prompt, "")
+    model = Keyword.get(opts, :model)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     workspace = Keyword.get(opts, :cwd, File.cwd!())
 
@@ -45,11 +47,14 @@ defmodule Shazam.Provider.Gemini do
           prompt
         end
 
+        args = ["-p", combined_prompt]
+        args = if model, do: ["-m", model | args], else: args
+        args = args ++ ["--include-directories", workspace]
+
         notify(agent_name, "Starting Gemini execution...")
 
         task = Task.async(fn ->
-          System.cmd(cli_bin, ["--prompt", combined_prompt],
-            stderr_to_stdout: true, cd: workspace)
+          System.cmd(cli_bin, args, stderr_to_stdout: true, cd: workspace)
         end)
 
         case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
