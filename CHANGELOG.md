@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.5 (2026-03-24)
+
+### Bug Fixes
+- **FileLogger compile-time path** — `@log_dir Path.expand("~/.shazam/logs")` baked builder's home dir into escript binary. Other users got "permission denied" trying to create `/Users/raphaelbarbosa/.shazam/logs`. Converted to runtime `log_dir()` function.
+
 ## v0.2.3 (2026-03-24)
 
 ### Bug Fixes
