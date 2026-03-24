@@ -21,32 +21,44 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
   """
 
   # Compact PM instructions — static, never changes. ~300 tokens instead of ~800.
-  @pm_instructions """
+  @pm_instructions_base """
 
   ## You are a PM/Manager
-  Your ONLY job: break the task into sub-tasks and delegate. You do NOT read code, investigate, write code, or use tools. You are a dispatcher.
+  Your ONLY job: break the task into sub-tasks and delegate. You do NOT read code, write code, or use tools. You are a dispatcher.
 
-  Rules: describe expected behavior (not implementation), define acceptance criteria (ACs), do NOT mention file names/classes/functions, do NOT define architecture.
-
-  IMPORTANT: Distribute tasks across ALL available agents. Do NOT assign everything to one agent.
-  IMPORTANT: Maximize parallelism. Use "depends_on" ONLY when a task truly cannot start before another finishes. Most tasks can run in parallel — set "depends_on": null for those.
-
-  ## CRITICAL: Test & QA Routing Rules
-  - ALL test-related tasks (writing tests, running tests, test plans, E2E, integration, unit tests) MUST be assigned to QA agents ONLY. NEVER assign test tasks to developers.
-  - Developers implement features and fix bugs. They do NOT write or run tests.
-  - When a QA agent reports a bug or failing test, create a fix task and assign it to the appropriate developer (any team). The fix task must reference the QA findings.
-  - After a dev fixes a bug, create a verification task for the QA agent to confirm the fix.
-  - Typical flow: PM → QA (test) → PM (bug report) → Dev (fix) → PM → QA (verify fix)
+  Rules:
+  - Keep it simple: create the MINIMUM number of sub-tasks needed. Prefer fewer, larger tasks over many small ones.
+  - Describe expected behavior and acceptance criteria (ACs), not implementation details.
+  - Distribute work across available agents, but don't create tasks just to keep agents busy.
+  - Use "depends_on" ONLY when a task truly cannot start before another finishes.
 
   Output format: one-line summary + JSON block. Nothing else.
   ```subtasks
   [{"title": "...", "description": "...\\n\\nACs:\\n- ...", "assigned_to": "agent_name", "depends_on": null}]
   ```
-  Each sub-task needs 2+ ACs. Use exact agent names. "depends_on" is optional — only use when strictly necessary.
+  Each sub-task needs 2+ ACs. Use exact agent names.
   """
 
+  @qa_routing_instructions """
+
+  ## QA Routing Rules
+  - ALL test-related tasks (writing tests, running tests, test plans) MUST be assigned to QA agents ONLY.
+  - Developers implement features and fix bugs. They do NOT write tests.
+  - When QA reports a bug, create a fix task for the developer.
+  - After a dev fixes a bug, create a verification task for QA.
+  - Flow: Dev (implement) → QA (test) → Dev (fix if needed) → QA (verify)
+  """
+
+  def pm_instructions do
+    qa_routing = Application.get_env(:shazam, :qa_routing, false)
+    if qa_routing do
+      @pm_instructions_base <> @qa_routing_instructions
+    else
+      @pm_instructions_base
+    end
+  end
+
   def implementation_instructions, do: @implementation_instructions
-  def pm_instructions, do: @pm_instructions
 
   @doc "Build skills prompt section."
   def build_skills_prompt([]), do: ""
@@ -131,7 +143,7 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
             ""
           end
 
-        @pm_instructions <> "\n### Your subordinates:\n#{agent_list}\n" <> cross_team_section
+        pm_instructions() <> "\n### Your subordinates:\n#{agent_list}\n" <> cross_team_section
       else
         ""
       end
