@@ -38,6 +38,46 @@ defmodule Shazam.QAManager do
     end
   end
 
+  @doc """
+  Generate a task for the QA agent to write and run real tests for a completed task.
+
+  Instead of a markdown checklist, this creates an actionable task that instructs
+  the QA agent to write actual test files, execute them, and report results.
+
+  Note: QA agents should be configured with dev tools: Read, Edit, Write, Bash, Grep, Glob.
+  """
+  def generate_test_task(completed_task) do
+    title = completed_task.title || ""
+    result = if is_binary(completed_task.result), do: completed_task.result, else: ""
+
+    prompt = """
+    Write actual test code for the following completed task.
+
+    Task: #{title}
+    Result: #{String.slice(result, 0..2000)}
+
+    Requirements:
+    - Write real test files (not just a checklist)
+    - Use the project's testing framework (detect from project files)
+    - Cover: happy path, edge cases, error handling
+    - Run the tests after writing them
+    - Report results: how many passed, how many failed
+    - If tests fail, create a bug report with details
+
+    Output format:
+    1. List of test files created
+    2. Test execution output
+    3. Pass/fail summary
+    """
+
+    %{
+      title: "QA: Write tests for '#{String.slice(title, 0..60)}'",
+      description: prompt,
+      assigned_to: nil,
+      created_by: "qa_system"
+    }
+  end
+
   @doc "List all QA docs with their status."
   def list_docs do
     dir = qa_dir()

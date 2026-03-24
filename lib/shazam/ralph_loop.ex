@@ -365,6 +365,9 @@ defmodule Shazam.RalphLoop do
               spawn(fn -> Shazam.AgentInbox.execute_pending(info.agent_name) end)
             end
 
+            # Auto-QA: create real test task when qa_auto is enabled
+            maybe_create_qa_test_task(task_id, state)
+
           {:ok, output} ->
             output = case Shazam.PluginManager.run_pipeline(
               :after_task_complete, {task_id, output},
@@ -398,6 +401,9 @@ defmodule Shazam.RalphLoop do
             if Shazam.AgentInbox.has_pending?(info.agent_name) do
               spawn(fn -> Shazam.AgentInbox.execute_pending(info.agent_name) end)
             end
+
+            # Auto-QA: create real test task when qa_auto is enabled
+            maybe_create_qa_test_task(task_id, state)
 
           {:error, reason} ->
             Shazam.Metrics.record_failure(info.agent_name)
@@ -534,6 +540,37 @@ defmodule Shazam.RalphLoop do
           Logger.debug("[RalphLoop:#{state.company_name}] Could not checkout #{task.id}: #{inspect(reason)}")
           state
       end
+      end
+    end
+  end
+
+  defp maybe_create_qa_test_task(task_id, state) do
+    if Application.get_env(:shazam, :qa_auto, false) do
+      case TaskBoard.get(task_id) do
+        {:ok, task} ->
+          # Skip if this is already a QA task (avoid infinite loop)
+          task_title = task.title || ""
+          unless String.starts_with?(task_title, "QA:") do
+            test_task = Shazam.QAManager.generate_test_task(task)
+            attrs = %{
+              title: test_task.title,
+              description: test_task.description,
+              status: if(state.auto_approve, do: :pending, else: :pending_approval),
+              created_by: test_task.created_by
+            }
+            case TaskBoard.create(attrs) do
+              {:ok, qa_task} ->
+                Logger.info("[RalphLoop:#{state.company_name}] Auto-QA test task created: #{qa_task.id}")
+                Shazam.API.EventBus.broadcast(%{
+                  event: "qa_test_task_created",
+                  task_id: qa_task.id,
+                  source_task_id: task_id,
+                  company: state.company_name
+                })
+              _ -> :ok
+            end
+          end
+        _ -> :ok
       end
     end
   end

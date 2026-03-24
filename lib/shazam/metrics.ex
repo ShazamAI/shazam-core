@@ -65,6 +65,21 @@ defmodule Shazam.Metrics do
     GenServer.call(__MODULE__, {:get_agent, name})
   end
 
+  @doc """
+  Returns dashboard-level aggregate stats combining Metrics and TaskBoard data.
+
+  Returns a map with:
+  - `avg_task_duration_ms` — average time from task start to completion
+  - `tasks_last_hour` — count of tasks completed in the last 60 minutes
+  - `tokens_per_task` — average tokens per completed task
+  - `retry_rate` — percentage of tasks that were retried (0.0 to 1.0)
+  - `total_tasks` — total number of tasks
+  - `total_cost` — total estimated cost in USD
+  """
+  def get_dashboard_stats do
+    GenServer.call(__MODULE__, :get_dashboard_stats)
+  end
+
   # --- Callbacks ---
 
   @impl true
@@ -188,6 +203,75 @@ defmodule Shazam.Metrics do
       end
 
     {:reply, result, state}
+  end
+
+  def handle_call(:get_dashboard_stats, _from, state) do
+    # Gather agent metrics from ETS
+    agent_entries =
+      :ets.tab2list(@table)
+      |> Enum.reject(fn {key, _} -> key == :__started_at end)
+
+    # Aggregate metrics totals
+    {total_successes, total_failures, total_duration_ms, total_tokens, total_cost} =
+      Enum.reduce(agent_entries, {0, 0, 0, 0, 0.0}, fn {_name, m}, {s, f, d, t, c} ->
+        {
+          s + m.successes,
+          f + m.failures,
+          d + m.total_duration_ms,
+          t + m.total_tokens,
+          c + (m.cost_usd || 0.0) + m.estimated_cost
+        }
+      end)
+
+    total_tasks = total_successes + total_failures
+
+    # Calculate avg task duration (only from successful completions which have duration)
+    avg_task_duration_ms = if total_successes > 0, do: div(total_duration_ms, total_successes), else: 0
+
+    # Tokens per task
+    tokens_per_task = if total_successes > 0, do: div(total_tokens, total_successes), else: 0
+
+    # Tasks completed in the last hour — query TaskBoard
+    tasks_last_hour = try do
+      now = DateTime.utc_now()
+      one_hour_ago = DateTime.add(now, -3600, :second)
+
+      Shazam.TaskBoard.list(%{status: :completed})
+      |> Enum.count(fn task ->
+        DateTime.compare(task.updated_at, one_hour_ago) != :lt
+      end)
+    rescue
+      _ -> 0
+    catch
+      :exit, _ -> 0
+    end
+
+    # Retry rate — tasks with retry_count > 0 / total tasks
+    retry_rate = try do
+      all_tasks = Shazam.TaskBoard.list(%{})
+      total = length(all_tasks)
+      if total > 0 do
+        retried = Enum.count(all_tasks, fn t -> Map.get(t, :retry_count, 0) > 0 end)
+        Float.round(retried / total, 4)
+      else
+        0.0
+      end
+    rescue
+      _ -> 0.0
+    catch
+      :exit, _ -> 0.0
+    end
+
+    stats = %{
+      avg_task_duration_ms: avg_task_duration_ms,
+      tasks_last_hour: tasks_last_hour,
+      tokens_per_task: tokens_per_task,
+      retry_rate: retry_rate,
+      total_tasks: total_tasks,
+      total_cost: Float.round(total_cost, 4)
+    }
+
+    {:reply, stats, state}
   end
 
   # --- Internal ---

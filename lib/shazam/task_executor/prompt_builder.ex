@@ -318,7 +318,9 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
         case Map.get(domain_config, domain) do
           config when is_map(config) ->
             paths = config["allowed_paths"] || config["paths"] || []
-            if is_list(paths) and paths != [] do
+            excluded_paths = config["excluded_paths"] || []
+
+            allowed_section = if is_list(paths) and paths != [] do
               """
 
               ## IMPORTANT: Path Restriction
@@ -332,6 +334,18 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
             else
               ""
             end
+
+            excluded_section = if is_list(excluded_paths) and excluded_paths != [] do
+              """
+
+              The following paths are EXCLUDED — do NOT access files under these directories:
+              #{Enum.map_join(excluded_paths, "\n", fn p -> "- #{p}" end)}
+              """
+            else
+              ""
+            end
+
+            allowed_section <> excluded_section
           _ ->
             ""
         end
