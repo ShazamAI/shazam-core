@@ -6,13 +6,13 @@ defmodule Shazam.Store do
 
   require Logger
 
-  @data_dir Path.expand("~/.shazam")
-
-  def data_dir, do: @data_dir
+  def data_dir do
+    Path.expand("~/.shazam")
+  end
 
   @doc "Initializes persistence directory."
   def init do
-    File.mkdir_p!(@data_dir)
+    File.mkdir_p!(data_dir())
     :ok
   end
 
@@ -51,7 +51,7 @@ defmodule Shazam.Store do
   def list_keys(prefix) do
     safe_prefix = prefix |> to_string() |> String.replace(~r/[^a-zA-Z0-9_\-:]/, "_")
 
-    case File.ls(@data_dir) do
+    case File.ls(data_dir()) do
       {:ok, files} ->
         files
         |> Enum.filter(fn f -> String.starts_with?(f, safe_prefix) and String.ends_with?(f, ".json") end)
@@ -79,6 +79,6 @@ defmodule Shazam.Store do
 
   defp key_to_path(key) do
     safe_key = key |> to_string() |> String.replace(~r/[^a-zA-Z0-9_\-:]/, "_")
-    Path.join(@data_dir, "#{safe_key}.json")
+    Path.join(data_dir(), "#{safe_key}.json")
   end
 end
