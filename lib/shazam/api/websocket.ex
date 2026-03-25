@@ -44,6 +44,20 @@ defmodule Shazam.API.WebSocket do
       config: config
     }
 
+    # Auto-register project in registry
+    if company && workspace do
+      agents = parse_agents(msg["agents"] || [])
+      try do
+        Shazam.ProjectRegistry.register(%{
+          name: company,
+          path: workspace,
+          agents_count: length(agents)
+        })
+      catch
+        _, _ -> :ok
+      end
+    end
+
     # Send initial status
     status = WebSocketCommands.build_status(new_state)
     {:push, {:text, Jason.encode!(status)}, new_state}

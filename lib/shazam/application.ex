@@ -44,6 +44,9 @@ defmodule Shazam.Application do
       # Plugin Manager — loads .shazam/plugins/*.ex at runtime
       Shazam.PluginManager,
 
+      # Project Registry — tracks known projects across sessions
+      Shazam.ProjectRegistry,
+
       # HTTP API on configurable port
       {Bandit, plug: Shazam.API.Router, port: Shazam.Daemon.port(), thousand_island_options: [num_acceptors: 10]}
     ]
