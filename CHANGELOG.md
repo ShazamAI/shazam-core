@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.0 (2026-03-25)
+
+### Features
+- **Hot code reload** — `POST /api/daemon/reload` recompiles and reloads all modules without stopping processes. Zero downtime. GenServer state, WebSocket connections, and running tasks preserved.
+- **FileWatcher** — polls workspace for file changes, broadcasts `file_created/changed/deleted` events via EventBus
+- **File API** — `GET /api/files/tree`, `GET /api/files?path=`, `PUT /api/files` with path traversal protection
+- **Sentry error tracking** — crash reporting for GenServer failures, API errors, daemon issues
+
+### Bug Fixes
+- **Agent zeroing bug (root cause)** — `build_agents_from_raw` only read string keys (`a["name"]`), now supports atom keys too (`a[:name]`). This was causing agents to lose their names when updated via WebSocket subscribe.
+- **Company.update_agents guard** — rejects updates with empty or nameless agent lists, preventing accidental overwrites
+- **Handle_start protection** — if company is already running, just resume RalphLoop without recreating agents
+
 ## v0.3.2 (2026-03-25)
 
 ### Features

@@ -98,22 +98,32 @@ defmodule Shazam.Company.Builder do
   """
   def build_agents_from_raw(agents_raw, company_name) do
     Enum.map(agents_raw, fn a ->
-      %Shazam.AgentWorker{
-        name: a["name"],
-        role: a["role"],
-        supervisor: a["supervisor"],
-        domain: a["domain"],
-        budget: a["budget"],
-        heartbeat_interval: a["heartbeat_interval"] || 60_000,
-        tools: a["tools"] || [],
-        skills: a["skills"] || [],
-        modules: a["modules"] || [],
-        system_prompt: a["system_prompt"],
-        model: a["model"],
-        fallback_model: a["fallback_model"],
-        provider: a["provider"],
-        company_ref: company_name
-      }
+      if is_struct(a, Shazam.AgentWorker) do
+        %{a | company_ref: company_name}
+      else
+        # Support both atom keys and string keys
+        %Shazam.AgentWorker{
+          name: g(a, :name),
+          role: g(a, :role),
+          supervisor: g(a, :supervisor),
+          domain: g(a, :domain),
+          budget: g(a, :budget),
+          heartbeat_interval: g(a, :heartbeat_interval) || 60_000,
+          tools: g(a, :tools) || [],
+          skills: g(a, :skills) || [],
+          modules: g(a, :modules) || [],
+          system_prompt: g(a, :system_prompt),
+          model: g(a, :model),
+          fallback_model: g(a, :fallback_model),
+          provider: g(a, :provider),
+          company_ref: company_name
+        }
+      end
     end)
+  end
+
+  # Get value from map with atom or string key
+  defp g(map, key) when is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
 end

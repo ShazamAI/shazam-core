@@ -4,6 +4,9 @@ defmodule Shazam.Application do
 
   @impl true
   def start(_type, _args) do
+    # Initialize Sentry for error tracking
+    :logger.add_handler(:sentry_handler, Sentry.LoggerHandler, %{})
+
     # Initialize persistence directory
     Shazam.Store.init()
 

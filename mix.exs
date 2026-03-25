@@ -1,7 +1,7 @@
 defmodule ShazamCore.MixProject do
   use Mix.Project
 
-  @version "0.3.2"
+  @version "0.5.0"
 
   def project do
     [
@@ -30,7 +30,9 @@ defmodule ShazamCore.MixProject do
       {:jason, "~> 1.4"},
       {:cors_plug, "~> 3.0"},
       {:websock_adapter, "~> 0.5"},
-      {:yaml_elixir, "~> 2.9"}
+      {:yaml_elixir, "~> 2.9"},
+      {:sentry, "~> 10.0"},
+      {:hackney, "~> 1.8"}
     ]
   end
 end

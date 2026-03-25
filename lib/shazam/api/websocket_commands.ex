@@ -98,6 +98,14 @@ defmodule Shazam.API.WebSocketCommands do
       raw == "/restart" ->
         handle_stop(company) ++ handle_start(conn_state)
 
+      raw == "/reload" ->
+        case Shazam.HotReload.reload() do
+          {:ok, result} ->
+            [event_msg("system", "info", "Hot reload: #{result.reloaded} modules reloaded in #{result.elapsed_ms}ms (zero downtime)")]
+          {:error, reason} ->
+            [event_msg("system", "error", "Reload failed: #{inspect(reason)}")]
+        end
+
       raw == "/auto-approve" ->
         current = try do
           Shazam.RalphLoop.status(company)[:auto_approve] || false
@@ -205,6 +213,55 @@ defmodule Shazam.API.WebSocketCommands do
     config = conn_state[:config] || %{}
     agents = conn_state[:agents] || []
 
+    # Check if company is already running — if so, just resume, don't recreate
+    already_running = try do
+      case Registry.lookup(Shazam.CompanyRegistry, company) do
+        [{_, _}] -> true
+        _ -> false
+      end
+    catch
+      _, _ -> false
+    end
+
+    if already_running do
+      # Just resume RalphLoop if paused
+      if Shazam.RalphLoop.exists?(company) do
+        Shazam.RalphLoop.resume(company)
+      end
+      [event_msg("system", "info", "Company '#{company}' ready"), build_status(conn_state)]
+    else
+      # Not running — start via ProjectRegistry (reads YAML with full agent data)
+      case Shazam.ProjectRegistry.start_project(company) do
+        {:ok, _} ->
+          [event_msg("system", "company_started", "Company '#{company}' started"), build_status(conn_state)]
+        {:error, _} ->
+          # Fallback: start with config from WebSocket subscribe (TUI mode)
+          handle_start_with_config(company, config, agents, conn_state)
+      end
+    end
+  end
+
+  defp handle_start_with_config(company, config, agents, conn_state) do
+    # Double-check: if company is already running, don't recreate
+    already_exists = try do
+      case Registry.lookup(Shazam.CompanyRegistry, company) do
+        [{_, _}] -> true
+        _ -> false
+      end
+    catch
+      _, _ -> false
+    end
+
+    if already_exists do
+      if Shazam.RalphLoop.exists?(company), do: Shazam.RalphLoop.resume(company)
+      return_msgs = [event_msg("system", "info", "Company '#{company}' ready"), build_status(conn_state)]
+      return_msgs
+    else
+      do_start_with_config(company, config, agents, conn_state)
+    end
+  end
+
+  defp do_start_with_config(company, config, agents, conn_state) do
     if config[:provider] do
       Application.put_env(:shazam, :default_provider, config[:provider])
     end
@@ -220,10 +277,13 @@ defmodule Shazam.API.WebSocketCommands do
       {:ok, _} ->
         event_msg("system", "company_started", "Company '#{company}' started — #{length(agents)} agent(s)")
       {:error, {:already_started, _}} ->
-        try do
-          Shazam.Company.update_agents(company, agents)
-        catch
-          _, _ -> :ok
+        # Only update agents if we actually have agent data (don't overwrite with empty)
+        if agents != [] && Enum.any?(agents, fn a -> a[:name] end) do
+          try do
+            Shazam.Company.update_agents(company, agents)
+          catch
+            _, _ -> :ok
+          end
         end
         event_msg("system", "info", "Company '#{company}' ready (#{length(agents)} agents)")
       {:error, reason} ->

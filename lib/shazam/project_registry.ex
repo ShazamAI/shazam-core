@@ -165,6 +165,8 @@ defmodule Shazam.ProjectRegistry do
             true -> Path.basename(path)
           end
           agents = parse_agents(yaml["agents"] || %{})
+          # Apply overrides from .shazam/overrides.json
+          agents = apply_overrides(agents, path)
           mission = cond do
             is_binary(yaml["mission"]) -> yaml["mission"]
             is_map(yaml["company"]) && is_binary(yaml["company"]["mission"]) -> yaml["company"]["mission"]
@@ -208,6 +210,33 @@ defmodule Shazam.ProjectRegistry do
   rescue
     e -> {:error, inspect(e)}
   end
+
+  defp apply_overrides(agents, workspace) do
+    override_path = Path.join(workspace, ".shazam/overrides.json")
+    case File.read(override_path) do
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, %{"agents" => agent_overrides}} when is_map(agent_overrides) ->
+            Enum.map(agents, fn agent ->
+              case Map.get(agent_overrides, agent.name) do
+                nil -> agent
+                overrides when is_map(overrides) ->
+                  agent
+                  |> maybe_override(:supervisor, overrides["supervisor"])
+                  |> maybe_override(:role, overrides["role"])
+                  |> maybe_override(:domain, overrides["domain"])
+              end
+            end)
+          _ -> agents
+        end
+      _ -> agents
+    end
+  rescue
+    _ -> agents
+  end
+
+  defp maybe_override(agent, _field, nil), do: agent
+  defp maybe_override(agent, field, value), do: Map.put(agent, field, value)
 
   defp parse_agents(agents_map) when is_map(agents_map) do
     Enum.map(agents_map, fn {name, config} ->

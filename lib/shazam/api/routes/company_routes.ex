@@ -149,6 +149,47 @@ defmodule Shazam.API.Routes.CompanyRoutes do
     end
   end
 
+  # Update a single agent's field (e.g., supervisor for hierarchy changes)
+  put "/:name/agents/:agent_name" do
+    updates = conn.body_params
+
+    try do
+      company_pid = case Registry.lookup(Shazam.CompanyRegistry, name) do
+        [{pid, _}] -> pid
+        _ -> nil
+      end
+
+      if company_pid do
+        # Get current agents, update the target one
+        state = :sys.get_state(company_pid)
+        updated_agents = Enum.map(state.agents, fn agent ->
+          if agent.name == agent_name do
+            agent
+            |> maybe_update(:supervisor, updates["supervisor"])
+            |> maybe_update(:role, updates["role"])
+            |> maybe_update(:domain, updates["domain"])
+          else
+            agent
+          end
+        end)
+
+        Shazam.Company.update_agents(name, updated_agents)
+
+        # Save override to workspace
+        workspace = Application.get_env(:shazam, :workspace)
+        if workspace do
+          save_override(workspace, agent_name, updates)
+        end
+
+        json(conn, 200, %{ok: true})
+      else
+        json(conn, 404, %{error: "Company not found"})
+      end
+    rescue
+      e -> json(conn, 422, %{error: inspect(e)})
+    end
+  end
+
   post "/:name/agents/add" do
     body = conn.body_params
 
@@ -222,5 +263,30 @@ defmodule Shazam.API.Routes.CompanyRoutes do
 
   match _ do
     json(conn, 404, %{error: "Not found"})
+  end
+
+  # ── Helpers ─────────────────────────────────────
+
+  defp maybe_update(agent, _field, nil), do: agent
+  defp maybe_update(agent, field, value), do: Map.put(agent, field, value)
+
+  defp save_override(workspace, agent_name, updates) do
+    override_path = Path.join(workspace, ".shazam/overrides.json")
+    File.mkdir_p!(Path.dirname(override_path))
+
+    existing = case File.read(override_path) do
+      {:ok, content} -> Jason.decode!(content)
+      _ -> %{}
+    end
+
+    agent_overrides = Map.get(existing, "agents", %{})
+    current = Map.get(agent_overrides, agent_name, %{})
+    merged = Map.merge(current, updates)
+    agent_overrides = Map.put(agent_overrides, agent_name, merged)
+    updated = Map.put(existing, "agents", agent_overrides)
+
+    File.write!(override_path, Jason.encode!(updated, pretty: true))
+  rescue
+    _ -> :ok
   end
 end

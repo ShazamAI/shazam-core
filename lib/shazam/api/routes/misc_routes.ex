@@ -52,6 +52,17 @@ defmodule Shazam.API.Routes.MiscRoutes do
     json(conn, 200, %{presets: presets})
   end
 
+  # --- Hot Reload ---
+
+  post "/daemon/reload" do
+    case Shazam.HotReload.reload() do
+      {:ok, result} ->
+        json(conn, 200, result)
+      {:error, reason} ->
+        json(conn, 500, %{error: inspect(reason)})
+    end
+  end
+
   # --- Health ---
 
   get "/health" do
