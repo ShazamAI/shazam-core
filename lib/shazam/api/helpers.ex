@@ -3,12 +3,14 @@ defmodule Shazam.API.Helpers do
 
   import Plug.Conn
 
+  @doc "Sends a JSON response with the given status code."
   def json(conn, status, data) do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(data))
   end
 
+  @doc "Converts a task struct to a JSON-serializable map."
   def serialize_task(task) do
     %{
       id: task.id,
@@ -27,11 +29,13 @@ defmodule Shazam.API.Helpers do
     }
   end
 
+  @doc "Serializes a task result for JSON output."
   def serialize_result(nil), do: nil
   def serialize_result({:error, reason}), do: %{error: inspect(reason)}
   def serialize_result(result) when is_binary(result), do: result
   def serialize_result(result), do: inspect(result, limit: 500)
 
+  @doc "Finds the first running company name from the RalphLoop registry."
   def find_first_company do
     case Registry.select(Shazam.RalphLoopRegistry, [{{:"$1", :"$2", :_}, [], [:"$1"]}]) do
       [name | _] -> name
@@ -39,6 +43,7 @@ defmodule Shazam.API.Helpers do
     end
   end
 
+  @doc "Looks up the company for a given task, falling back to the first running company."
   def find_company_for_task(task_id) do
     case Shazam.TaskBoard.get(task_id) do
       {:ok, task} -> Map.get(task, :company)
@@ -46,6 +51,7 @@ defmodule Shazam.API.Helpers do
     end
   end
 
+  @doc "Executes a bulk action (pause, resume, delete, approve, retry) on a task."
   def execute_bulk_action("pause", task_id) do
     company = find_company_for_task(task_id)
     if company, do: Shazam.RalphLoop.pause_task(company, task_id), else: Shazam.TaskBoard.pause(task_id)
@@ -59,6 +65,7 @@ defmodule Shazam.API.Helpers do
   def execute_bulk_action("retry", task_id), do: Shazam.TaskBoard.retry(task_id)
   def execute_bulk_action(action, _task_id), do: {:error, "unknown_action: #{action}"}
 
+  @doc "Adds a workspace path to the persistent workspace history."
   def add_workspace_to_history(path, company \\ nil) do
     history = case Shazam.Store.load("workspace_history") do
       {:ok, %{"workspaces" => list}} -> list
@@ -82,6 +89,7 @@ defmodule Shazam.API.Helpers do
     Shazam.Store.save("workspace_history", %{"workspaces" => updated})
   end
 
+  @doc "Updates the company name for a workspace in the history."
   def update_workspace_company(path, company_name) do
     history = case Shazam.Store.load("workspace_history") do
       {:ok, %{"workspaces" => list}} -> list

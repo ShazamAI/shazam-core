@@ -10,10 +10,12 @@ defmodule Shazam.FileWatcher do
   @ignored_dirs ~w(.git node_modules _build deps .elixir_ls .shazam target dist .next .nuxt __pycache__ .venv)
   @max_depth 5
 
+  @doc false
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
+  @doc "Sets or changes the workspace directory to watch."
   def set_workspace(path) when is_binary(path) do
     GenServer.cast(__MODULE__, {:set_workspace, path})
   end

@@ -81,7 +81,7 @@ defmodule Shazam.GitContext do
     _ -> ""
   end
 
-  @doc "Returns the current branch name, or \"\" if unavailable."
+  @doc "Returns the current git branch name, or empty string if not a git repo."
   @spec current_branch(String.t() | nil) :: String.t()
   def current_branch(nil), do: ""
 

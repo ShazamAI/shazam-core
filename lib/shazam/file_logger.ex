@@ -4,6 +4,7 @@ defmodule Shazam.FileLogger do
   Rotates daily. Safe to call from any process.
   """
 
+  @doc "Initializes the log directory."
   def init do
     File.mkdir_p!(log_dir())
   end
@@ -22,9 +23,16 @@ defmodule Shazam.FileLogger do
     _ -> :ok
   end
 
+  @doc "Logs at info level."
   def info(msg), do: log(:info, msg)
+
+  @doc "Logs at error level."
   def error(msg), do: log(:error, msg)
+
+  @doc "Logs at warn level."
   def warn(msg), do: log(:warn, msg)
+
+  @doc "Logs at debug level."
   def debug(msg), do: log(:debug, msg)
 
   @doc "Returns today's log file path."

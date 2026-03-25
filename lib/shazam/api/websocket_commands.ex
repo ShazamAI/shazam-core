@@ -8,6 +8,7 @@ defmodule Shazam.API.WebSocketCommands do
 
   import Shazam.API.WebSocketCommands.Helpers
 
+  @doc "Dispatches a TUI command string and returns a list of response messages."
   def handle(command, conn_state) do
     company = conn_state[:company]
     workspace = conn_state[:workspace]
@@ -615,6 +616,7 @@ defmodule Shazam.API.WebSocketCommands do
 
   # ── Builders ──────────────────────────────────────────
 
+  @doc "Builds a status snapshot map for the TUI dashboard."
   def build_status(conn_state) do
     company = conn_state[:company] || ""
     workspace = conn_state[:workspace]

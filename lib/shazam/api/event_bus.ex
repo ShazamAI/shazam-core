@@ -5,18 +5,22 @@ defmodule Shazam.API.EventBus do
 
   use GenServer
 
+  @doc false
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
+  @doc "Subscribes the calling process to receive `{:event, event}` messages."
   def subscribe do
     GenServer.call(__MODULE__, {:subscribe, self()})
   end
 
+  @doc "Unsubscribes the calling process from event broadcasts."
   def unsubscribe do
     GenServer.cast(__MODULE__, {:unsubscribe, self()})
   end
 
+  @doc "Broadcasts an event to all subscribed processes."
   def broadcast(event) do
     GenServer.cast(__MODULE__, {:broadcast, event})
   end

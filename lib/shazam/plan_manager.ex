@@ -3,11 +3,13 @@ defmodule Shazam.PlanManager do
 
   @plans_dir ".shazam/plans"
 
+  @doc "Returns the resolved plans directory path for the current workspace."
   def plans_dir do
     workspace = Application.get_env(:shazam, :workspace, File.cwd!())
     Path.join(workspace, @plans_dir)
   end
 
+  @doc "Ensures the plans directory exists, creating it if needed."
   def ensure_dir do
     dir = plans_dir()
     File.mkdir_p!(dir)

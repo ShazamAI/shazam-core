@@ -8,14 +8,17 @@ defmodule Shazam.Daemon do
 
   @pid_file_path "~/.shazam/daemon.pid"
 
+  @doc false
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  @doc "Returns `true` if the SHAZAM_DAEMON environment variable is set."
   def daemon_mode? do
     System.get_env("SHAZAM_DAEMON") == "true"
   end
 
+  @doc "Returns the HTTP port (from SHAZAM_PORT env, config, or default 4040)."
   def port do
     case System.get_env("SHAZAM_PORT") do
       nil -> Application.get_env(:shazam, :port, 4040)
@@ -27,6 +30,7 @@ defmodule Shazam.Daemon do
     end
   end
 
+  @doc "Returns a health status map for the daemon."
   def health do
     GenServer.call(__MODULE__, :health)
   catch

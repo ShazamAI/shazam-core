@@ -3,11 +3,13 @@ defmodule Shazam.QAManager do
 
   @qa_dir ".shazam/qa"
 
+  @doc "Returns the QA directory path for the current workspace."
   def qa_dir do
     workspace = Application.get_env(:shazam, :workspace, File.cwd!())
     Path.join(workspace, @qa_dir)
   end
 
+  @doc "Ensures the QA directory and reports subdirectory exist."
   def ensure_dir do
     dir = qa_dir()
     File.mkdir_p!(dir)

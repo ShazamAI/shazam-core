@@ -52,6 +52,9 @@ defmodule Shazam.TaskTemplates do
     }
   ]
 
+  @doc "Returns all available task templates."
   def list, do: @templates
+
+  @doc "Finds a task template by ID."
   def get(id), do: Enum.find(@templates, &(&1.id == id))
 end

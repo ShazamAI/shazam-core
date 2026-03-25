@@ -1,4 +1,9 @@
 defmodule Shazam.Application do
+  @moduledoc """
+  OTP Application entry point for Shazam.
+  Starts all core supervision trees, registries, and GenServers.
+  """
+
   use Application
   require Logger
 

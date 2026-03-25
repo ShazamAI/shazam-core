@@ -24,11 +24,13 @@ defmodule Shazam.SkillMemory do
 
   # ── Paths ────────────────────────────────────────────────────
 
+  @doc "Returns the base memories directory for the current workspace."
   def base_dir do
     workspace = Application.get_env(:shazam, :workspace, nil)
     if workspace, do: Path.join([workspace, ".shazam", @memories_dir]), else: nil
   end
 
+  @doc "Resolves a relative skill path to an absolute path under the memories directory."
   def skill_path(relative_path) do
     case base_dir() do
       nil -> nil

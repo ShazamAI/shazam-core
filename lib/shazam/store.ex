@@ -6,6 +6,7 @@ defmodule Shazam.Store do
 
   require Logger
 
+  @doc "Returns the base persistence directory path (`~/.shazam`)."
   def data_dir do
     Path.expand("~/.shazam")
   end

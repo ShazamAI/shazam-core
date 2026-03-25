@@ -41,6 +41,7 @@ defmodule Shazam.Metrics do
     GenServer.cast(__MODULE__, {:record_tokens, agent, tokens, cost_usd})
   end
 
+  @doc "Sets the display status for an agent (e.g. `\"working\"`, `\"idle\"`)."
   def set_status(agent, status) do
     GenServer.cast(__MODULE__, {:set_status, agent, status})
   end

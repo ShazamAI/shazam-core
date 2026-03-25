@@ -16,6 +16,8 @@ defmodule Shazam.HotReload do
     Shazam.TaskBoard.Persistence,
     Shazam.SessionPool,
     Shazam.Orchestrator,
+    Shazam.Orchestrator.Executor,
+    Shazam.Orchestrator.Streaming,
     Shazam.Metrics,
     Shazam.AgentPulse,
     Shazam.CircuitBreaker,
