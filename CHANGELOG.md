@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.2 (2026-03-25)
+
+### Features
+- **ProjectRegistry** — persistent registry of known projects in `~/.shazam/projects.json`
+  - Auto-registers projects when TUI subscribes via WebSocket
+  - REST API: `GET/POST /api/projects`, `POST /:name/start|stop`, `DELETE /:name`
+  - Start project from dashboard: reads shazam.yaml, boots company + agents
+  - Tasks filterable by `?company=` query param
+
+### Bug Fixes
+- **YAML nested company.name** — supports both `name: "X"` and `company: { name: "X" }` formats
+- **Name validation** — prevents saving maps as project names
+
 ## v0.3.0 (2026-03-24)
 
 ### Features
