@@ -678,7 +678,7 @@ defmodule Shazam.TaskBoard do
       [{^task_id, %{pipeline: pipeline, current_stage: current_stage} = task}]
           when is_list(pipeline) and is_integer(current_stage) ->
         now = DateTime.utc_now()
-        workflow = Shazam.Workflow.get(task.workflow) || Shazam.Workflow.default_workflow()
+        _workflow = Shazam.Workflow.get(task.workflow) || Shazam.Workflow.default_workflow()
 
         # Mark current stage as completed
         pipeline = Shazam.Workflow.update_pipeline_stage(pipeline, current_stage, %{

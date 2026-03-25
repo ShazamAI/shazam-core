@@ -44,16 +44,17 @@ defmodule Shazam.API.EventBus do
   end
 
   @impl true
-  def handle_cast({:unsubscribe, pid}, state) do
-    {:noreply, %{state | subscribers: MapSet.delete(state.subscribers, pid)}}
-  end
-
-  @impl true
   def handle_call(:recent_events, _from, state) do
     events = :queue.to_list(state.buffer)
     {:reply, Enum.reverse(events), state}
   end
 
+  @impl true
+  def handle_cast({:unsubscribe, pid}, state) do
+    {:noreply, %{state | subscribers: MapSet.delete(state.subscribers, pid)}}
+  end
+
+  @impl true
   def handle_cast({:broadcast, event}, state) do
     Enum.each(state.subscribers, fn pid ->
       send(pid, {:event, event})

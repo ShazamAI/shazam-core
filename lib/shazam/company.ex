@@ -262,13 +262,23 @@ defmodule Shazam.Company do
 
   def handle_call({:update_agents, agents_raw}, _from, state) do
     # Reject empty or nameless agent updates — prevents accidental overwrites
-    if agents_raw == [] || (is_list(agents_raw) && Enum.all?(agents_raw, fn a ->
-      name = a[:name] || a["name"] || (if is_struct(a), do: Map.get(a, :name))
-      name == nil || name == ""
-    end)) do
-      {:reply, :ok, state}
-    else
-      handle_update_agents(agents_raw, state)
+    cond do
+      agents_raw == [] ->
+        {:reply, :ok, state}
+
+      is_list(agents_raw) && Enum.all?(agents_raw, fn a ->
+        name = a[:name] || a["name"] || (if is_struct(a), do: Map.get(a, :name))
+        name == nil || name == ""
+      end) ->
+        {:reply, :ok, state}
+
+      # Guard: reject updates that would drop agents (dashboard bug protection)
+      is_list(agents_raw) && length(agents_raw) < length(state.agents) ->
+        Logger.warning("[Company:#{state.name}] Rejected agent update: sent #{length(agents_raw)} agents but have #{length(state.agents)} — would lose agents")
+        {:reply, {:error, :would_lose_agents}, state}
+
+      true ->
+        handle_update_agents(agents_raw, state)
     end
   end
 

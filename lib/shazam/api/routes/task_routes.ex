@@ -186,7 +186,7 @@ defmodule Shazam.API.Routes.TaskRoutes do
 
   post "/:task_id/approve-stage" do
     case Shazam.TaskBoard.get(task_id) do
-      {:ok, task} ->
+      {:ok, _task} ->
         output = conn.body_params["output"] || "Stage approved manually"
         approved_by = conn.body_params["approved_by"] || "user"
         case Shazam.TaskBoard.advance_stage(task_id, output, approved_by) do

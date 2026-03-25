@@ -104,8 +104,9 @@ defmodule Shazam.API.WebSocketCommands do
         handle_stop(company) ++ handle_start(conn_state)
 
       raw == "/reload" ->
-        case Shazam.HotReload.reload() do
-          {:ok, result} ->
+        {:ok, result} = Shazam.HotReload.reload()
+        case result.compile do
+          :ok ->
             [event_msg("system", "info", "Hot reload: #{result.reloaded} modules reloaded in #{result.elapsed_ms}ms (zero downtime)")]
           {:error, reason} ->
             [event_msg("system", "error", "Reload failed: #{inspect(reason)}")]
