@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.3.0 (2026-03-24)
+
+### Features
+- **Daemon mode** — run shazam-core as a persistent background service with `SHAZAM_DAEMON=true`
+  - `Shazam.Daemon` GenServer manages PID file (`~/.shazam/daemon.pid`) and health
+  - Auto-starts when `SHAZAM_DAEMON=true` env var is set
+  - Multiple projects/companies run simultaneously in the same daemon
+- **Full WebSocket command handler** — `Shazam.API.WebSocketCommands` handles all TUI commands server-side
+  - `/start`, `/stop`, `/resume`, `/restart`, `/dashboard`, `/tasks`, `/agents`
+  - `/task`, `/approve`, `/reject`, `/kill-task`, `/delete-task`, `/pause-task`, `/resume-task`
+  - `/plan`, `/qa`, `/memory`, `/workspaces`, `/health`, `/search`, `/export`
+  - Text without `/` prefix creates a task (same as inline mode)
+- **Enhanced WebSocket protocol** — `Shazam.API.WebSocket` rewritten for full TUI support
+  - `subscribe` action for project registration (company, workspace, agents, config)
+  - `command` action for executing TUI commands
+  - Rich event forwarding: agent_output, tool_use, approvals, status updates
+  - Company-scoped event filtering for multi-project isolation
+- **Health API enriched** — `GET /api/health` now returns companies, memory, PID, port
+
 ## v0.2.5 (2026-03-24)
 
 ### Bug Fixes

@@ -56,7 +56,29 @@ defmodule Shazam.API.Routes.MiscRoutes do
 
   get "/health" do
     workspace = Application.get_env(:shazam, :workspace, nil)
-    json(conn, 200, %{status: "ok", version: "0.1.0", workspace: workspace})
+    memory_mb = div(:erlang.memory(:total), 1_048_576)
+
+    companies = try do
+      Registry.select(Shazam.CompanyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> Enum.map(&to_string/1)
+    rescue
+      _ -> []
+    catch
+      _, _ -> []
+    end
+
+    pid = to_string(:os.getpid())
+    port = Application.get_env(:shazam, :port, 4040)
+
+    json(conn, 200, %{
+      status: "ok",
+      version: "0.2.5",
+      workspace: workspace,
+      memory_mb: memory_mb,
+      companies: companies,
+      pid: pid,
+      port: port
+    })
   end
 
   # --- Legacy Memory Banks ---

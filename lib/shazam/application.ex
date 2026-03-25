@@ -45,8 +45,15 @@ defmodule Shazam.Application do
       Shazam.PluginManager,
 
       # HTTP API on configurable port
-      {Bandit, plug: Shazam.API.Router, port: Application.get_env(:shazam, :port, 4040), thousand_island_options: [num_acceptors: 10]}
+      {Bandit, plug: Shazam.API.Router, port: Shazam.Daemon.port(), thousand_island_options: [num_acceptors: 10]}
     ]
+
+    # Add Daemon GenServer when running in daemon mode
+    children = if Shazam.Daemon.daemon_mode?() do
+      children ++ [Shazam.Daemon]
+    else
+      children
+    end
 
     result = Supervisor.start_link(children, strategy: :one_for_one, name: Shazam.Supervisor)
 
