@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.3 (2026-03-25)
+
+### Bug Fixes
+- **Agent edit wipe protection** — `Company.update_agents` now rejects updates with fewer agents than current state, preventing dashboard edit from accidentally replacing the entire agent list.
+- **Compilation warnings** — fixed all 6 warnings: unreachable HotReload clauses, unused variables, ungrouped EventBus clauses.
+
+### Tests
+- Added 269+ new tests across 12 modules (RetryPolicy, TaskTemplates, AgentPresets, SubtaskParser, Provider.Resolver, API.Helpers, PromptBuilder, Company.Builder, PlanManager, ProjectDetector, FileLogger, SkillMemory).
+- Coverage improved from 19% to 24%, with 4 modules at 100%.
+
 ## v0.5.2 (2026-03-25)
 
 ### Features
