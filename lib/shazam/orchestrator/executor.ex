@@ -14,6 +14,21 @@ defmodule Shazam.Orchestrator.Executor do
   Returns `{:ok, result_text, touched_files}` or `{:error, reason}`.
   """
   def execute_query(session, prompt, agent_name) do
+    do_execute_query(session, prompt, agent_name)
+  rescue
+    e ->
+      Logger.error("[#{agent_name}] execute_query crashed: #{inspect(e, limit: 200)}")
+      {:error, Exception.message(e)}
+  catch
+    :exit, reason ->
+      Logger.error("[#{agent_name}] execute_query exit: #{inspect(reason, limit: 200)}")
+      {:error, inspect(reason, limit: 200)}
+    kind, reason ->
+      Logger.error("[#{agent_name}] execute_query #{kind}: #{inspect(reason, limit: 200)}")
+      {:error, inspect(reason, limit: 200)}
+  end
+
+  defp do_execute_query(session, prompt, agent_name) do
     # Accumulate touched files (Edit, Write)
     touched_files = :ets.new(:touched_files, [:set, :private])
 
@@ -58,6 +73,8 @@ defmodule Shazam.Orchestrator.Executor do
         end
     end
   end
+
+  # ── Helpers ──────────────────────────────
 
   @doc """
   Inspects a streaming message for Edit/Write tool uses and records
