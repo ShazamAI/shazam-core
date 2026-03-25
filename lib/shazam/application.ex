@@ -44,6 +44,9 @@ defmodule Shazam.Application do
       # Plugin Manager — loads .shazam/plugins/*.ex at runtime
       Shazam.PluginManager,
 
+      # File Watcher — detects workspace file changes
+      Shazam.FileWatcher,
+
       # Project Registry — tracks known projects across sessions
       Shazam.ProjectRegistry,
 

@@ -39,6 +39,7 @@ defmodule Shazam.API.Router do
 
   # --- Forwarded sub-routers ---
 
+  forward "/api/files",       to: Shazam.API.Routes.FileRoutes
   forward "/api/projects",    to: Shazam.API.Routes.ProjectRoutes
   forward "/api/companies",  to: Shazam.API.Routes.CompanyRoutes
   forward "/api/tasks",      to: Shazam.API.Routes.TaskRoutes
