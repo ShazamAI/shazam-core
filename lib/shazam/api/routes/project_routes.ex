@@ -43,22 +43,24 @@ defmodule Shazam.API.Routes.ProjectRoutes do
         true -> nil
       end
 
-      name = if config_file do
+      {name, agents_count} = if config_file do
         case YamlElixir.read_from_file(Path.join(path, config_file)) do
-          {:ok, yaml} -> yaml["name"] || yaml["company"] || Path.basename(path)
-          _ -> Path.basename(path)
+          {:ok, yaml} ->
+            # Support both flat (name: X) and nested (company: {name: X}) formats
+            n = cond do
+              is_binary(yaml["name"]) -> yaml["name"]
+              is_map(yaml["company"]) && is_binary(yaml["company"]["name"]) -> yaml["company"]["name"]
+              true -> Path.basename(path)
+            end
+            agents = case yaml["agents"] do
+              a when is_map(a) -> map_size(a)
+              _ -> 0
+            end
+            {n, agents}
+          _ -> {Path.basename(path), 0}
         end
       else
-        Path.basename(path)
-      end
-
-      agents_count = if config_file do
-        case YamlElixir.read_from_file(Path.join(path, config_file)) do
-          {:ok, %{"agents" => agents}} when is_map(agents) -> map_size(agents)
-          _ -> 0
-        end
-      else
-        0
+        {Path.basename(path), 0}
       end
 
       Shazam.ProjectRegistry.register(%{

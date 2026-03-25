@@ -72,6 +72,13 @@ defmodule Shazam.ProjectRegistry do
     config_file = attrs[:config_file] || attrs["config_file"] || find_config_file(path)
     agents_count = attrs[:agents_count] || attrs["agents_count"] || 0
 
+    # Ensure name is a string (not a map from nested YAML)
+    name = cond do
+      is_binary(name) -> name
+      is_map(name) && is_binary(name["name"]) -> name["name"]
+      true -> Path.basename(to_string(path))
+    end
+
     project = %{
       name: name,
       path: path,
@@ -150,9 +157,19 @@ defmodule Shazam.ProjectRegistry do
       # Parse the YAML config
       case YamlElixir.read_from_file(full_config_path) do
         {:ok, yaml} ->
-          company_name = yaml["name"] || yaml["company"] || project.name
+          # Support both flat (name: X) and nested (company: {name: X}) formats
+          company_name = cond do
+            is_binary(yaml["name"]) -> yaml["name"]
+            is_map(yaml["company"]) && is_binary(yaml["company"]["name"]) -> yaml["company"]["name"]
+            is_binary(project.name) -> project.name
+            true -> Path.basename(path)
+          end
           agents = parse_agents(yaml["agents"] || %{})
-          mission = yaml["mission"] || ""
+          mission = cond do
+            is_binary(yaml["mission"]) -> yaml["mission"]
+            is_map(yaml["company"]) && is_binary(yaml["company"]["mission"]) -> yaml["company"]["mission"]
+            true -> ""
+          end
 
           # Set workspace
           Application.put_env(:shazam, :workspace, path)
