@@ -613,8 +613,19 @@ defmodule Shazam.API.WebSocketCommands do
 
   def build_status(conn_state) do
     company = conn_state[:company] || ""
-    agents = conn_state[:agents] || []
     workspace = conn_state[:workspace]
+
+    # Get agents from the actual Company GenServer, not from conn_state (which may be empty)
+    agents = try do
+      case Registry.lookup(Shazam.CompanyRegistry, company) do
+        [{pid, _}] ->
+          state = :sys.get_state(pid)
+          state.agents || []
+        _ -> conn_state[:agents] || []
+      end
+    catch
+      _, _ -> conn_state[:agents] || []
+    end
 
     {pending, running, done, awaiting} = get_task_counts(company)
 

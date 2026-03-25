@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.1 (2026-03-25)
+
+### Bug Fixes
+- **Output capture fix** — `Stream.collect` replaces `Stream.final_result` for claude_code 0.33+ compatibility. `ResultMessage.result` is empty in v0.33; text is now captured from streaming collect.
+- **PM prompt assertive** — PM no longer asks for confirmation. Added "NEVER ask questions, ALWAYS create subtasks immediately" to instructions.
+- **Daemon PATH** — includes `~/.local/bin`, `~/.cargo/bin`, `~/.asdf/shims`, `~/.mise/shims`, `/opt/homebrew/bin` so `claude` CLI is found.
+- **Config API** — added `GET /api/config` and `PUT /api/config/ralph-loop` endpoints for dashboard Configuration page.
+- **claude_code pinned** — `~> 0.33` (was `~> 0.29`) to match installed version.
+
 ## v0.5.0 (2026-03-25)
 
 ### Features

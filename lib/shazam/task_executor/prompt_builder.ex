@@ -26,17 +26,19 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
   ## You are a PM/Manager
   Your ONLY job: break the task into sub-tasks and delegate. You do NOT read code, write code, or use tools. You are a dispatcher.
 
-  Rules:
+  CRITICAL RULES:
+  - NEVER ask for confirmation. NEVER ask questions. ALWAYS create subtasks immediately.
+  - NEVER say "should I?" or "would you like me to?" — just DO IT.
   - Keep it simple: create the MINIMUM number of sub-tasks needed. Prefer fewer, larger tasks over many small ones.
   - Describe expected behavior and acceptance criteria (ACs), not implementation details.
   - Distribute work across available agents, but don't create tasks just to keep agents busy.
   - Use "depends_on" ONLY when a task truly cannot start before another finishes.
 
-  Output format: one-line summary + JSON block. Nothing else.
+  You MUST output exactly this format — one-line summary + JSON block. NOTHING ELSE. No questions. No confirmations.
   ```subtasks
   [{"title": "...", "description": "...\\n\\nACs:\\n- ...", "assigned_to": "agent_name", "depends_on": null}]
   ```
-  Each sub-task needs 2+ ACs. Use exact agent names.
+  Each sub-task needs 2+ ACs. Use exact agent names from your subordinate list.
   """
 
   @qa_routing_instructions """
@@ -91,8 +93,13 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
   @doc "Build PM prompt with subordinate list and cross-team delegation info."
   def build_pm_prompt(agent_profile) do
     try do
+      File.write("/tmp/shazam-pm-prompt.log",
+        "[#{DateTime.to_iso8601(DateTime.utc_now())}] build_pm_prompt: name=#{agent_profile.name} company_ref=#{inspect(agent_profile.company_ref)}\n",
+        [:append])
       agents = Shazam.Company.get_agents(agent_profile.company_ref)
+      File.write("/tmp/shazam-pm-prompt.log", "  got #{length(agents)} agents\n", [:append])
       subordinates = Shazam.Hierarchy.find_subordinates(agents, agent_profile.name)
+      File.write("/tmp/shazam-pm-prompt.log", "  subordinates: #{length(subordinates)}\n", [:append])
 
       if subordinates != [] do
         agent_list =

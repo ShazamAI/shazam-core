@@ -449,7 +449,8 @@ defmodule Shazam.Orchestrator do
         stream
       end
 
-    result = ClaudeCode.Stream.final_result(stream)
+    # Collect full conversation summary (text + tool calls + result)
+    summary = ClaudeCode.Stream.collect(stream)
 
     # Flush any remaining buffered text
     flush_text_buffer(agent_name)
@@ -457,10 +458,20 @@ defmodule Shazam.Orchestrator do
     files = :ets.tab2list(touched_files) |> Enum.map(fn {path} -> path end)
     :ets.delete(touched_files)
 
-    case result do
+    # Extract text from summary (collect returns %{text: "...", result: %ResultMessage{}})
+    text = summary.text || ""
+    result_msg = summary.result
+
+    case result_msg do
       %{is_error: true} = err -> {:error, err}
-      %{result: text} -> {:ok, text, files}
-      nil -> {:error, :no_result}
+      %{result: r} when is_binary(r) and r != "" -> {:ok, r, files}
+      _ ->
+        # Fallback: use collected text if result field is empty
+        if text != "" do
+          {:ok, text, files}
+        else
+          {:error, :no_result}
+        end
     end
   end
 

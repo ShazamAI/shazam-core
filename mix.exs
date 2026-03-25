@@ -1,7 +1,7 @@
 defmodule ShazamCore.MixProject do
   use Mix.Project
 
-  @version "0.5.0"
+  @version "0.5.1"
 
   def project do
     [
@@ -24,7 +24,7 @@ defmodule ShazamCore.MixProject do
 
   defp deps do
     [
-      {:claude_code, "~> 0.29"},
+      {:claude_code, "~> 0.33"},
       {:bandit, "~> 1.0"},
       {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},

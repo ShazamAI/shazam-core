@@ -52,6 +52,71 @@ defmodule Shazam.API.Routes.MiscRoutes do
     json(conn, 200, %{presets: presets})
   end
 
+  # --- Config ---
+
+  get "/config" do
+    company = try do
+      Registry.select(Shazam.CompanyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> List.first()
+      |> to_string()
+    catch
+      _, _ -> nil
+    end
+
+    ralph_config = if company do
+      try do
+        status = Shazam.RalphLoop.status(company)
+        %{
+          auto_approve: status[:auto_approve] || false,
+          max_concurrent: status[:max_concurrent] || 4,
+          poll_interval: status[:poll_interval] || 5000,
+          module_lock: status[:module_lock] || true,
+          peer_reassign: status[:peer_reassign] || true,
+          auto_retry: status[:auto_retry] || true,
+          max_retries: status[:max_retries] || 2
+        }
+      catch
+        _, _ -> %{}
+      end
+    else
+      %{}
+    end
+
+    workspace = Application.get_env(:shazam, :workspace, nil)
+
+    json(conn, 200, %{
+      company: company,
+      ralph_loop: ralph_config,
+      workspace: workspace,
+      provider: to_string(Application.get_env(:shazam, :default_provider, "claude_code")),
+      qa_auto: Application.get_env(:shazam, :qa_auto, false),
+      qa_routing: Application.get_env(:shazam, :qa_routing, false)
+    })
+  end
+
+  put "/config/ralph-loop" do
+    company = try do
+      Registry.select(Shazam.CompanyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> List.first()
+      |> to_string()
+    catch
+      _, _ -> nil
+    end
+
+    if company && Shazam.RalphLoop.exists?(company) do
+      params = conn.body_params
+      if params["auto_approve"] != nil, do: Shazam.RalphLoop.set_auto_approve(company, params["auto_approve"])
+      if params["max_concurrent"], do: Shazam.RalphLoop.set_config(company, "max_concurrent", params["max_concurrent"])
+      if params["poll_interval"], do: Shazam.RalphLoop.set_config(company, "poll_interval", params["poll_interval"])
+      if params["module_lock"] != nil, do: Shazam.RalphLoop.set_config(company, "module_lock", params["module_lock"])
+      if params["peer_reassign"] != nil, do: Shazam.RalphLoop.set_config(company, "peer_reassign", params["peer_reassign"])
+      if params["auto_retry"] != nil, do: Shazam.RalphLoop.set_config(company, "auto_retry", params["auto_retry"])
+      json(conn, 200, %{ok: true})
+    else
+      json(conn, 404, %{error: "No active company"})
+    end
+  end
+
   # --- Hot Reload ---
 
   post "/daemon/reload" do
