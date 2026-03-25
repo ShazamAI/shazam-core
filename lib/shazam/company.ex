@@ -319,8 +319,9 @@ defmodule Shazam.Company do
         in_progress = Enum.count(agent_tasks, fn t -> t.status in [:running, :in_progress] end)
         pending = Enum.count(agent_tasks, fn t -> t.status == :pending end)
 
-        tokens_used = metrics.total_tokens || 0
-        remaining = max(agent.budget - tokens_used, 0)
+        tokens_used = metrics[:total_tokens] || 0
+        budget = agent.budget || 0
+        remaining = max(budget - tokens_used, 0)
 
         %{
           name: agent.name,

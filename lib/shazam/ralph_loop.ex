@@ -338,35 +338,13 @@ defmodule Shazam.RalphLoop do
               _ -> output
             end
 
-            TaskBoard.complete(task_id, output)
             Shazam.CircuitBreaker.record_success()
-            Logger.info("[RalphLoop:#{state.company_name}] Task #{task_id} completed by #{info.agent_name}")
-            Shazam.FileLogger.info("Task #{task_id} completed by #{info.agent_name}")
             Shazam.Metrics.record_completion(info.agent_name, duration_ms)
             Shazam.AgentPulse.clear(info.agent_name)
             ModuleManager.auto_claim_modules(state.company_name, info.agent_name, touched_files)
-            SubtaskParser.maybe_create_subtasks(task_id, info.agent_name, output, state.company_name, state.auto_approve)
-            unblock_dependents(task_id)
 
-            # Capture context for cross-provider continuity
-            case TaskBoard.get(task_id) do
-              {:ok, task} -> Shazam.ContextManager.capture(info.agent_name, task, output, touched_files)
-              _ -> :ok
-            end
-
-            Shazam.API.EventBus.broadcast(%{
-              event: "task_completed",
-              task_id: task_id,
-              agent: info.agent_name,
-              company: state.company_name
-            })
-
-            if Shazam.AgentInbox.has_pending?(info.agent_name) do
-              spawn(fn -> Shazam.AgentInbox.execute_pending(info.agent_name) end)
-            end
-
-            # Auto-QA: create real test task when qa_auto is enabled
-            maybe_create_qa_test_task(task_id, state)
+            # Pipeline-aware completion
+            handle_task_stage_completion(task_id, output, info.agent_name, touched_files, state)
 
           {:ok, output} ->
             output = case Shazam.PluginManager.run_pipeline(
@@ -377,33 +355,11 @@ defmodule Shazam.RalphLoop do
               _ -> output
             end
 
-            TaskBoard.complete(task_id, output)
             Shazam.CircuitBreaker.record_success()
-            Logger.info("[RalphLoop:#{state.company_name}] Task #{task_id} completed by #{info.agent_name}")
-            Shazam.FileLogger.info("Task #{task_id} completed by #{info.agent_name}")
             Shazam.Metrics.record_completion(info.agent_name, duration_ms)
-            SubtaskParser.maybe_create_subtasks(task_id, info.agent_name, output, state.company_name, state.auto_approve)
-            unblock_dependents(task_id)
 
-            # Capture context for cross-provider continuity
-            case TaskBoard.get(task_id) do
-              {:ok, task} -> Shazam.ContextManager.capture(info.agent_name, task, output, [])
-              _ -> :ok
-            end
-
-            Shazam.API.EventBus.broadcast(%{
-              event: "task_completed",
-              task_id: task_id,
-              agent: info.agent_name,
-              company: state.company_name
-            })
-
-            if Shazam.AgentInbox.has_pending?(info.agent_name) do
-              spawn(fn -> Shazam.AgentInbox.execute_pending(info.agent_name) end)
-            end
-
-            # Auto-QA: create real test task when qa_auto is enabled
-            maybe_create_qa_test_task(task_id, state)
+            # Pipeline-aware completion
+            handle_task_stage_completion(task_id, output, info.agent_name, [], state)
 
           {:error, reason} ->
             Shazam.Metrics.record_failure(info.agent_name)
@@ -478,18 +434,27 @@ defmodule Shazam.RalphLoop do
     end
   end
 
-  # Auto-assign tasks with nil/empty/"unassigned" to the top of the hierarchy
+  # Auto-assign tasks with nil/empty/"unassigned" — respects required_role for pipeline tasks
   defp maybe_auto_assign(task, state) do
     assigned = task.assigned_to
     if assigned == nil or assigned == "" or assigned == "unassigned" do
+      required_role = Map.get(task, :required_role)
+
       top_agent = try do
         agents = Shazam.Company.get_agents(state.company_name)
-        case Enum.find(agents, fn a -> a.supervisor == nil end) do
-          nil -> case agents do
-            [first | _] -> first.name
-            _ -> nil
+
+        if required_role && required_role != "*" do
+          # Pipeline task: find an agent matching the required role
+          find_agent_by_role(agents, required_role, state)
+        else
+          # Standard task: assign to top of hierarchy
+          case Enum.find(agents, fn a -> a.supervisor == nil end) do
+            nil -> case agents do
+              [first | _] -> first.name
+              _ -> nil
+            end
+            agent -> agent.name
           end
-          agent -> agent.name
         end
       catch
         _, _ -> nil
@@ -508,6 +473,41 @@ defmodule Shazam.RalphLoop do
       end
     else
       task
+    end
+  end
+
+  # Find an agent matching a required role. Matches by:
+  # 1. Exact role match (e.g. "qa" matches role "QA Engineer")
+  # 2. Role contains the keyword (e.g. "dev" matches "Senior Developer")
+  # 3. Agent preset ID match (e.g. "reviewer" matches preset "pr_reviewer")
+  defp find_agent_by_role(agents, required_role, state) do
+    role_lower = String.downcase(required_role)
+    busy_agents = Map.values(state.running) |> Enum.map(& &1.agent_name)
+
+    # Try exact or fuzzy role match, preferring idle agents
+    matched = Enum.filter(agents, fn a ->
+      agent_role = String.downcase(a.role || "")
+      agent_name = String.downcase(a.name || "")
+      String.contains?(agent_role, role_lower) or
+      String.contains?(agent_name, role_lower) or
+      agent_role == role_lower
+    end)
+
+    # Prefer idle agents
+    idle = Enum.reject(matched, fn a -> a.name in busy_agents end)
+
+    case idle do
+      [first | _] -> first.name
+      [] ->
+        case matched do
+          [first | _] -> first.name
+          [] ->
+            # Fallback: assign to top of hierarchy (PM)
+            case Enum.find(agents, fn a -> a.supervisor == nil end) do
+              nil -> nil
+              agent -> agent.name
+            end
+        end
     end
   end
 
@@ -577,6 +577,88 @@ defmodule Shazam.RalphLoop do
       end
       end
     end
+  end
+
+  # Pipeline-aware task completion: advance stage or complete
+  defp handle_task_stage_completion(task_id, output, agent_name, touched_files, state) do
+    case TaskBoard.get(task_id) do
+      {:ok, %{pipeline: pipeline} = task} when is_list(pipeline) and length(pipeline) > 1 ->
+        # Task has a pipeline — advance to next stage instead of completing
+        case TaskBoard.advance_stage(task_id, output, agent_name) do
+          {:completed, _updated_task} ->
+            # Pipeline fully done — normal completion flow
+            Logger.info("[RalphLoop:#{state.company_name}] Task #{task_id} pipeline completed by #{agent_name}")
+            Shazam.FileLogger.info("Task #{task_id} pipeline completed by #{agent_name}")
+            SubtaskParser.maybe_create_subtasks(task_id, agent_name, output, state.company_name, state.auto_approve)
+            unblock_dependents(task_id)
+            Shazam.ContextManager.capture(agent_name, task, output, touched_files)
+
+            Shazam.API.EventBus.broadcast(%{
+              event: "task_completed",
+              task_id: task_id,
+              agent: agent_name,
+              company: state.company_name
+            })
+
+            if Shazam.AgentInbox.has_pending?(agent_name) do
+              spawn(fn -> Shazam.AgentInbox.execute_pending(agent_name) end)
+            end
+
+            maybe_create_qa_test_task(task_id, state)
+
+          {:ok, updated_task} ->
+            # Advanced to next stage
+            stage_name = Enum.at(updated_task.pipeline, updated_task.current_stage)[:name] || "unknown"
+            Logger.info("[RalphLoop:#{state.company_name}] Task #{task_id} advanced to stage '#{stage_name}' (#{updated_task.current_stage + 1}/#{length(updated_task.pipeline)})")
+            Shazam.FileLogger.info("Task #{task_id} → stage '#{stage_name}' by #{agent_name}")
+            Shazam.ContextManager.capture(agent_name, task, output, touched_files)
+
+            Shazam.API.EventBus.broadcast(%{
+              event: "task_stage_advanced",
+              task_id: task_id,
+              agent: agent_name,
+              company: state.company_name,
+              stage: stage_name,
+              stage_index: updated_task.current_stage,
+              total_stages: length(updated_task.pipeline)
+            })
+
+          {:error, reason} ->
+            Logger.error("[RalphLoop:#{state.company_name}] Failed to advance stage for #{task_id}: #{inspect(reason)}")
+            # Fallback to normal completion
+            TaskBoard.complete(task_id, output)
+        end
+
+      _ ->
+        # No pipeline — standard completion
+        TaskBoard.complete(task_id, output)
+        Logger.info("[RalphLoop:#{state.company_name}] Task #{task_id} completed by #{agent_name}")
+        Shazam.FileLogger.info("Task #{task_id} completed by #{agent_name}")
+        SubtaskParser.maybe_create_subtasks(task_id, agent_name, output, state.company_name, state.auto_approve)
+        unblock_dependents(task_id)
+
+        case TaskBoard.get(task_id) do
+          {:ok, task} -> Shazam.ContextManager.capture(agent_name, task, output, touched_files)
+          _ -> :ok
+        end
+
+        Shazam.API.EventBus.broadcast(%{
+          event: "task_completed",
+          task_id: task_id,
+          agent: agent_name,
+          company: state.company_name
+        })
+
+        if Shazam.AgentInbox.has_pending?(agent_name) do
+          spawn(fn -> Shazam.AgentInbox.execute_pending(agent_name) end)
+        end
+
+        maybe_create_qa_test_task(task_id, state)
+    end
+  rescue
+    e ->
+      Logger.error("[RalphLoop:#{state.company_name}] Stage completion error for #{task_id}: #{inspect(e)}")
+      TaskBoard.complete(task_id, output)
   end
 
   defp maybe_create_qa_test_task(task_id, state) do

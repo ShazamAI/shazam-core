@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.2 (2026-03-25)
+
+### Features
+- **Multi-stage workflow pipelines** — tasks can follow configurable workflows (e.g. Dev → Review → QA). Stages auto-assign to agents by role, advance on completion, and support rejection with rollback.
+- **Workflow CRUD API** — `GET/POST/PUT/DELETE /api/workflows` for managing workflow templates stored as YAML in `.shazam/workflows/`.
+- **Pipeline stage actions** — `POST /tasks/:id/approve-stage` and `/reject-stage` endpoints for manual stage approval/rejection.
+- **EventBus event buffer** — stores last 50 events in a circular buffer, exposed via `GET /api/events/recent`.
+- **Orphaned process cleanup** — SessionPool now detects and reaps orphaned OS-level Claude processes every 5 minutes.
+- **Circuit breaker reset endpoint** — `POST /api/ralph-loop/reset-circuit-breaker` to reset tripped state from dashboard.
+- **Enhanced config API** — `GET /api/config` now returns agents, domains, plugins, mission, tech stack, and health status.
+
+### Improvements
+- **Pipeline-aware task assignment** — `required_role` field routes tasks to matching agents by role.
+- **Task serialization** — includes pipeline, workflow, current_stage, and required_role fields when present.
+- **RalphLoop refactor** — extracted `handle_task_stage_completion` for pipeline-aware completion flow with stage advancement, events, and auto-QA.
+
+### Bug Fixes
+- **Ralph endpoint paths** — fixed `/api/ralph-loop/pause` and `/resume` route consistency.
+- **Circuit breaker status** — included in health endpoint response.
+
 ## v0.5.1 (2026-03-25)
 
 ### Bug Fixes

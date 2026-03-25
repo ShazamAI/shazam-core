@@ -52,10 +52,116 @@ defmodule Shazam.API.Routes.MiscRoutes do
     json(conn, 200, %{presets: presets})
   end
 
+  # --- Workflows ---
+
+  get "/workflows" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    workflows = Shazam.Workflow.list_all(workspace)
+      |> Enum.map(fn w ->
+        %{
+          name: w.name,
+          stages: Enum.map(w.stages, fn s ->
+            %{name: s.name, role: s.role, prompt_suffix: s.prompt_suffix, on_reject: s.on_reject}
+          end)
+        }
+      end)
+    json(conn, 200, %{workflows: workflows})
+  end
+
+  post "/workflows" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    name = conn.body_params["name"]
+    stages_raw = conn.body_params["stages"] || []
+
+    cond do
+      !workspace ->
+        json(conn, 400, %{error: "No workspace set"})
+      !name || name == "" ->
+        json(conn, 400, %{error: "name is required"})
+      length(stages_raw) == 0 ->
+        json(conn, 400, %{error: "At least one stage is required"})
+      true ->
+        dir = Path.join(workspace, ".shazam/workflows")
+        File.mkdir_p!(dir)
+        path = Path.join(dir, "#{name}.yml")
+
+        yaml_content = """
+        name: #{name}
+        stages:
+        #{Enum.map_join(stages_raw, "\n", fn s ->
+          on_reject = if s["on_reject"], do: "\n    on_reject: #{s["on_reject"]}", else: ""
+          prompt = if s["prompt_suffix"], do: "\n    prompt_suffix: \"#{String.replace(s["prompt_suffix"] || "", "\"", "\\\"")}\"", else: ""
+          "  - name: #{s["name"]}\n    role: #{s["role"]}#{prompt}#{on_reject}"
+        end)}
+        """
+
+        case File.write(path, yaml_content) do
+          :ok -> json(conn, 201, %{status: "ok", name: name, path: path})
+          {:error, reason} -> json(conn, 500, %{error: "Write failed: #{reason}"})
+        end
+    end
+  end
+
+  put "/workflows/:name" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    stages_raw = conn.body_params["stages"] || []
+
+    cond do
+      !workspace ->
+        json(conn, 400, %{error: "No workspace set"})
+      length(stages_raw) == 0 ->
+        json(conn, 400, %{error: "At least one stage is required"})
+      true ->
+        dir = Path.join(workspace, ".shazam/workflows")
+        File.mkdir_p!(dir)
+        path = Path.join(dir, "#{name}.yml")
+
+        yaml_content = """
+        name: #{name}
+        stages:
+        #{Enum.map_join(stages_raw, "\n", fn s ->
+          on_reject = if s["on_reject"], do: "\n    on_reject: #{s["on_reject"]}", else: ""
+          prompt = if s["prompt_suffix"], do: "\n    prompt_suffix: \"#{String.replace(s["prompt_suffix"] || "", "\"", "\\\"")}\"", else: ""
+          "  - name: #{s["name"]}\n    role: #{s["role"]}#{prompt}#{on_reject}"
+        end)}
+        """
+
+        case File.write(path, yaml_content) do
+          :ok -> json(conn, 200, %{status: "ok", name: name})
+          {:error, reason} -> json(conn, 500, %{error: "Write failed: #{reason}"})
+        end
+    end
+  end
+
+  delete "/workflows/:name" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    if workspace do
+      path = Path.join(workspace, ".shazam/workflows/#{name}.yml")
+      File.rm(path)
+      json(conn, 200, %{status: "ok"})
+    else
+      json(conn, 400, %{error: "No workspace set"})
+    end
+  end
+
+  get "/workflows/:name" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    case Shazam.Workflow.get(name, workspace) do
+      nil -> json(conn, 404, %{error: "Workflow '#{name}' not found"})
+      w ->
+        json(conn, 200, %{workflow: %{
+          name: w.name,
+          stages: Enum.map(w.stages, fn s ->
+            %{name: s.name, role: s.role, prompt_suffix: s.prompt_suffix, on_reject: s.on_reject}
+          end)
+        }})
+    end
+  end
+
   # --- Config ---
 
   get "/config" do
-    company = try do
+    company_name = try do
       Registry.select(Shazam.CompanyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
       |> List.first()
       |> to_string()
@@ -63,9 +169,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
       _, _ -> nil
     end
 
-    ralph_config = if company do
+    ralph_config = if company_name do
       try do
-        status = Shazam.RalphLoop.status(company)
+        status = Shazam.RalphLoop.status(company_name)
         %{
           auto_approve: status[:auto_approve] || false,
           max_concurrent: status[:max_concurrent] || 4,
@@ -84,11 +190,88 @@ defmodule Shazam.API.Routes.MiscRoutes do
 
     workspace = Application.get_env(:shazam, :workspace, nil)
 
+    # Build agents map from company
+    agents = if company_name do
+      try do
+        Shazam.Company.get_agents(company_name)
+        |> Enum.reduce(%{}, fn agent, acc ->
+          Map.put(acc, agent.name, %{
+            role: agent.role,
+            supervisor: agent.supervisor,
+            budget: agent.budget || 0,
+            model: agent.model,
+            fallback_model: Map.get(agent, :fallback_model),
+            provider: Map.get(agent, :provider),
+            tools: agent.tools || [],
+            skills: Map.get(agent, :skills) || [],
+            modules: Map.get(agent, :modules) || [],
+            domain: agent.domain,
+            workspace: Map.get(agent, :workspace),
+            system_prompt: Map.get(agent, :system_prompt),
+            heartbeat_interval: Map.get(agent, :heartbeat_interval, 60000)
+          })
+        end)
+      catch
+        _, _ -> %{}
+      end
+    else
+      %{}
+    end
+
+    # Build domains from company domain_config
+    domains = if company_name do
+      try do
+        Shazam.Company.get_domain_config(company_name) || %{}
+      catch
+        _, _ -> %{}
+      end
+    else
+      %{}
+    end
+
+    # Get tech stack from app config
+    tech_stack = Application.get_env(:shazam, :tech_stack, %{}) || %{}
+
+    # Get plugins
+    plugins = try do
+      Shazam.PluginManager.list_plugins()
+      |> Enum.map(fn p ->
+        %{
+          name: p[:name] || "unknown",
+          enabled: p[:enabled] != false,
+          events: p[:events] || [],
+          config: p[:config] || %{}
+        }
+      end)
+    catch
+      _, _ -> []
+    end
+
+    # Get mission from company info
+    {mission, company_info_workspace} = if company_name do
+      try do
+        info = Shazam.Company.info(company_name)
+        {info[:mission], info[:workspace]}
+      catch
+        _, _ -> {nil, nil}
+      end
+    else
+      {nil, nil}
+    end
+
     json(conn, 200, %{
-      company: company,
-      ralph_loop: ralph_config,
-      workspace: workspace,
       provider: to_string(Application.get_env(:shazam, :default_provider, "claude_code")),
+      company: %{
+        name: company_name,
+        mission: mission,
+        workspace: workspace || company_info_workspace
+      },
+      domains: domains,
+      workspaces: %{},
+      tech_stack: tech_stack,
+      agents: agents,
+      config: ralph_config,
+      plugins: plugins,
       qa_auto: Application.get_env(:shazam, :qa_auto, false),
       qa_routing: Application.get_env(:shazam, :qa_routing, false)
     })
@@ -114,6 +297,56 @@ defmodule Shazam.API.Routes.MiscRoutes do
       json(conn, 200, %{ok: true})
     else
       json(conn, 404, %{error: "No active company"})
+    end
+  end
+
+  # --- Events ---
+
+  get "/events/recent" do
+    # Return recent events from the EventBus buffer (last 50)
+    events = try do
+      Shazam.API.EventBus.recent_events()
+    catch
+      _, _ -> []
+    end
+    json(conn, 200, %{events: events})
+  end
+
+  # --- Context/Memory Tree ---
+
+  get "/context/tree" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    context_dir = if workspace, do: Path.join(workspace, ".shazam/context"), else: nil
+
+    tree = if context_dir && File.dir?(context_dir) do
+      build_context_tree(context_dir, context_dir)
+    else
+      # Fallback: use memory-banks data
+      banks = Shazam.SkillMemory.list_all()
+      Enum.map(banks, fn s ->
+        %{name: Path.basename(s.path), path: s.path, type: "file", children: []}
+      end)
+    end
+
+    json(conn, 200, %{tree: tree})
+  end
+
+  get "/context/file" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    rel_path = conn.query_params["path"] || ""
+    context_dir = if workspace, do: Path.join(workspace, ".shazam/context"), else: nil
+
+    cond do
+      context_dir == nil ->
+        json(conn, 400, %{error: "No workspace set"})
+      true ->
+        full_path = Path.join(context_dir, rel_path)
+        if File.regular?(full_path) do
+          content = File.read!(full_path)
+          json(conn, 200, %{file: %{path: rel_path, content: content, name: Path.basename(rel_path)}})
+        else
+          json(conn, 404, %{error: "File not found"})
+        end
     end
   end
 
@@ -146,6 +379,12 @@ defmodule Shazam.API.Routes.MiscRoutes do
     pid = to_string(:os.getpid())
     port = Application.get_env(:shazam, :port, 4040)
 
+    circuit_breaker_tripped = try do
+      Shazam.CircuitBreaker.tripped?()
+    catch
+      _, _ -> false
+    end
+
     json(conn, 200, %{
       status: "ok",
       version: "0.2.5",
@@ -153,7 +392,8 @@ defmodule Shazam.API.Routes.MiscRoutes do
       memory_mb: memory_mb,
       companies: companies,
       pid: pid,
-      port: port
+      port: port,
+      circuit_breaker_tripped: circuit_breaker_tripped
     })
   end
 
@@ -266,5 +506,24 @@ defmodule Shazam.API.Routes.MiscRoutes do
 
   match _ do
     json(conn, 404, %{error: "Not found"})
+  end
+
+  # ── Private helpers ─────────────────────
+  defp build_context_tree(dir, root) do
+    case File.ls(dir) do
+      {:ok, entries} ->
+        entries
+        |> Enum.sort()
+        |> Enum.map(fn entry ->
+          full = Path.join(dir, entry)
+          rel = Path.relative_to(full, root)
+          if File.dir?(full) do
+            %{name: entry, path: rel, type: "directory", children: build_context_tree(full, root)}
+          else
+            %{name: entry, path: rel, type: "file", children: []}
+          end
+        end)
+      _ -> []
+    end
   end
 end

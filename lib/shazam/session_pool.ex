@@ -177,6 +177,9 @@ defmodule Shazam.SessionPool do
       Logger.info("[SessionPool] Cleaned up idle session for '#{name}'")
     end)
 
+    # Reap orphaned OS claude processes not tracked by the pool
+    reap_orphaned_processes(Map.new(to_keep))
+
     {:noreply, %{state | sessions: Map.new(to_keep)}}
   end
 
@@ -215,5 +218,69 @@ defmodule Shazam.SessionPool do
     catch
       :exit, _ -> :ok
     end
+  end
+
+  # Kill orphaned OS-level claude processes that are NOT tracked by any active session.
+  # This handles the case where ClaudeCode.start_link fails mid-way, leaving a CLI process alive.
+  defp reap_orphaned_processes(active_sessions) do
+    daemon_pid = to_string(:os.getpid())
+
+    # Get all OS pids of claude --output-format stream-json processes
+    os_claude_pids = try do
+      {output, 0} = System.cmd("pgrep", ["-f", "claude.*stream-json"], stderr_to_stdout: true)
+      output
+      |> String.split("\n", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+    catch
+      _, _ -> []
+    end
+
+    if length(os_claude_pids) <= map_size(active_sessions) do
+      # No orphans — count matches or is less
+      :ok
+    else
+      # Get the OS PIDs of active sessions' child processes
+      tracked_erlang_pids = Enum.map(active_sessions, fn {_name, entry} -> entry.pid end)
+
+      tracked_os_pids = Enum.flat_map(tracked_erlang_pids, fn erlang_pid ->
+        try do
+          # Get the OS PID from the Erlang port linked to this process
+          info = Process.info(erlang_pid, [:links])
+          links = (info || [])[:links] || []
+          Enum.flat_map(links, fn
+            link when is_port(link) ->
+              case Port.info(link, :os_pid) do
+                {:os_pid, os_pid} -> [to_string(os_pid)]
+                _ -> []
+              end
+            _ -> []
+          end)
+        catch
+          _, _ -> []
+        end
+      end)
+
+      # Find orphans: OS claude processes not tracked
+      orphans = os_claude_pids -- tracked_os_pids -- [daemon_pid]
+
+      # Only kill processes that are clearly orphaned (not our current process)
+      excess = length(orphans) - map_size(active_sessions)
+      if excess > 0 do
+        Logger.warning("[SessionPool] Found #{length(orphans)} potential orphaned claude processes, killing #{excess}")
+        orphans
+        |> Enum.take(excess)
+        |> Enum.each(fn pid_str ->
+          try do
+            System.cmd("kill", [pid_str])
+            Logger.info("[SessionPool] Reaped orphaned claude process: #{pid_str}")
+          catch
+            _, _ -> :ok
+          end
+        end)
+      end
+    end
+  rescue
+    _ -> :ok
   end
 end

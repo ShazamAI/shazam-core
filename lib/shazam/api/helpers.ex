@@ -12,7 +12,7 @@ defmodule Shazam.API.Helpers do
 
   @doc "Converts a task struct to a JSON-serializable map."
   def serialize_task(task) do
-    %{
+    base = %{
       id: task.id,
       title: task.title,
       description: task.description,
@@ -27,6 +27,29 @@ defmodule Shazam.API.Helpers do
       updated_at: to_string(task.updated_at),
       deleted_at: if(Map.get(task, :deleted_at), do: to_string(task.deleted_at), else: nil)
     }
+
+    # Include pipeline fields when present
+    pipeline = Map.get(task, :pipeline)
+    if is_list(pipeline) and length(pipeline) > 1 do
+      base
+      |> Map.put(:workflow, Map.get(task, :workflow))
+      |> Map.put(:current_stage, Map.get(task, :current_stage))
+      |> Map.put(:required_role, Map.get(task, :required_role))
+      |> Map.put(:pipeline, Enum.map(pipeline, fn stage ->
+        %{
+          name: stage[:name],
+          role: stage[:role],
+          status: to_string(stage[:status] || :pending),
+          assigned_to: stage[:assigned_to],
+          completed_by: stage[:completed_by],
+          output: stage[:output],
+          started_at: if(stage[:started_at], do: to_string(stage[:started_at]), else: nil),
+          completed_at: if(stage[:completed_at], do: to_string(stage[:completed_at]), else: nil)
+        }
+      end))
+    else
+      base
+    end
   end
 
   @doc "Serializes a task result for JSON output."

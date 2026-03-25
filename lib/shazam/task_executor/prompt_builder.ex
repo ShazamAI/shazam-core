@@ -375,6 +375,7 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
   def build_task_prompt(agent_profile, task, :new) do
     ancestry = TaskBoard.goal_ancestry(task.id)
     retry_context = Shazam.RetryPolicy.build_retry_context(task)
+    pipeline_context = build_pipeline_context(task)
 
     context_parts = [
       "## Your role: #{agent_profile.role}",
@@ -388,7 +389,7 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
 
     """
     #{retry_context}#{context_str}
-
+    #{pipeline_context}
     ## Task
     #{task.title}
 
@@ -398,13 +399,60 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
 
   def build_task_prompt(_agent_profile, task, :reused) do
     retry_context = Shazam.RetryPolicy.build_retry_context(task)
+    pipeline_context = build_pipeline_context(task)
 
     """
     #{retry_context}## New Task
     #{task.title}
-
+    #{pipeline_context}
     #{if task.description, do: "## Details\n#{task.description}", else: ""}
     """
+  end
+
+  @doc "Builds pipeline stage context for tasks with workflows."
+  def build_pipeline_context(task) do
+    pipeline = Map.get(task, :pipeline)
+    current_stage = Map.get(task, :current_stage)
+    workflow_name = Map.get(task, :workflow)
+
+    if is_list(pipeline) and is_integer(current_stage) and length(pipeline) > 1 do
+      current = Enum.at(pipeline, current_stage)
+      stage_name = current[:name] || "unknown"
+      total = length(pipeline)
+
+      # Get prompt suffix from workflow definition
+      workspace = Application.get_env(:shazam, :workspace, nil)
+      workflow = Shazam.Workflow.get(workflow_name, workspace)
+      suffix = if workflow, do: Shazam.Workflow.stage_prompt_suffix(workflow, current_stage), else: nil
+
+      # Build context from previous stages
+      prev_context = Shazam.Workflow.build_stage_context(pipeline, current_stage)
+
+      stage_list = pipeline
+        |> Enum.with_index()
+        |> Enum.map(fn {s, i} ->
+          marker = cond do
+            i < current_stage -> "[DONE]"
+            i == current_stage -> "[CURRENT]"
+            true -> "[PENDING]"
+          end
+          "  #{marker} #{i + 1}. #{s[:name]} (#{s[:role]})"
+        end)
+        |> Enum.join("\n")
+
+      """
+
+      ## Workflow Pipeline: #{workflow_name} — Stage #{current_stage + 1}/#{total}: #{stage_name}
+      #{stage_list}
+
+      #{if suffix, do: "## Stage Instructions\n#{suffix}\n", else: ""}
+      #{if prev_context != "", do: "## Previous Stage Outputs\n#{prev_context}", else: ""}
+      """
+    else
+      ""
+    end
+  rescue
+    _ -> ""
   end
 
   @doc "Build tech stack context prompt from stored config."

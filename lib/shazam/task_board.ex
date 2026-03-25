@@ -24,7 +24,12 @@ defmodule Shazam.TaskBoard do
           company: String.t() | nil,
           result: any(),
           created_at: DateTime.t(),
-          updated_at: DateTime.t()
+          updated_at: DateTime.t(),
+          # Pipeline/workflow fields
+          workflow: String.t() | nil,
+          pipeline: list() | nil,
+          current_stage: non_neg_integer() | nil,
+          required_role: String.t() | nil
         }
 
   @save_debounce 1_000
@@ -145,6 +150,16 @@ defmodule Shazam.TaskBoard do
   @doc "Returns the goal ancestry of a task (chain of parent tasks)."
   def goal_ancestry(task_id) do
     GenServer.call(__MODULE__, {:goal_ancestry, task_id}, @call_timeout)
+  end
+
+  @doc "Advances a task to the next pipeline stage. Returns {:ok, task} or {:completed, task}."
+  def advance_stage(task_id, output, completed_by) do
+    GenServer.call(__MODULE__, {:advance_stage, task_id, output, completed_by}, @call_timeout)
+  end
+
+  @doc "Rejects current pipeline stage, sending task back to the rejection target stage."
+  def reject_stage(task_id, reason, rejected_by) do
+    GenServer.call(__MODULE__, {:reject_stage, task_id, reason, rejected_by}, @call_timeout)
   end
 
   # --- Callbacks ---
@@ -293,6 +308,10 @@ defmodule Shazam.TaskBoard do
           id = "task_#{state.counter + 1}"
           now = DateTime.utc_now()
 
+          # Resolve and instantiate workflow pipeline
+          {pipeline, current_stage, required_role, workflow_name} =
+            resolve_pipeline(attrs)
+
           task = %{
             id: id,
             title: title,
@@ -308,6 +327,10 @@ defmodule Shazam.TaskBoard do
             retry_count: attrs[:retry_count] || 0,
             max_retries: attrs[:max_retries] || 2,
             last_error: nil,
+            workflow: workflow_name,
+            pipeline: pipeline,
+            current_stage: current_stage,
+            required_role: required_role,
             created_at: now,
             updated_at: now
           }
@@ -331,6 +354,9 @@ defmodule Shazam.TaskBoard do
     id = "task_#{state.counter + 1}"
     now = DateTime.utc_now()
 
+    {pipeline, current_stage, required_role, workflow_name} =
+      resolve_pipeline(attrs)
+
     task = %{
       id: id,
       title: attrs[:title] || "Untitled",
@@ -346,6 +372,10 @@ defmodule Shazam.TaskBoard do
       retry_count: attrs[:retry_count] || 0,
       max_retries: attrs[:max_retries] || 2,
       last_error: nil,
+      workflow: workflow_name,
+      pipeline: pipeline,
+      current_stage: current_stage,
+      required_role: required_role,
       created_at: now,
       updated_at: now
     }
@@ -643,6 +673,118 @@ defmodule Shazam.TaskBoard do
     {:reply, tasks, state}
   end
 
+  def handle_call({:advance_stage, task_id, output, completed_by}, _from, state) do
+    case :ets.lookup(state.table, task_id) do
+      [{^task_id, %{pipeline: pipeline, current_stage: current_stage} = task}]
+          when is_list(pipeline) and is_integer(current_stage) ->
+        now = DateTime.utc_now()
+        workflow = Shazam.Workflow.get(task.workflow) || Shazam.Workflow.default_workflow()
+
+        # Mark current stage as completed
+        pipeline = Shazam.Workflow.update_pipeline_stage(pipeline, current_stage, %{
+          status: :completed,
+          completed_by: completed_by,
+          output: output,
+          completed_at: now
+        })
+
+        case Shazam.Workflow.next_stage(pipeline, current_stage) do
+          nil ->
+            # Last stage — task is truly completed
+            updated = %{task |
+              status: :completed,
+              result: output,
+              pipeline: pipeline,
+              current_stage: current_stage,
+              updated_at: now
+            }
+            :ets.insert(state.table, {task_id, updated})
+            Logger.info("[TaskBoard] Task #{task_id} pipeline completed (all stages done)")
+            broadcast(:task_completed, updated)
+            {:reply, {:completed, updated}, schedule_save(state)}
+
+          next_idx ->
+            # Advance to next stage
+            next_role = Shazam.Workflow.stage_role(pipeline, next_idx)
+            pipeline = Shazam.Workflow.update_pipeline_stage(pipeline, next_idx, %{
+              status: :pending,
+              started_at: now
+            })
+
+            updated = %{task |
+              status: :pending,
+              assigned_to: nil,
+              result: nil,
+              pipeline: pipeline,
+              current_stage: next_idx,
+              required_role: next_role,
+              updated_at: now
+            }
+            :ets.insert(state.table, {task_id, updated})
+            Logger.info("[TaskBoard] Task #{task_id} advanced to stage #{next_idx} (#{Enum.at(pipeline, next_idx)[:name]}, role: #{next_role})")
+            broadcast(:task_stage_advanced, updated)
+            {:reply, {:ok, updated}, schedule_save(state)}
+        end
+
+      [{^task_id, _task}] ->
+        # No pipeline — treat as normal complete
+        handle_call({:complete, task_id, output}, nil, state)
+
+      [] ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:reject_stage, task_id, reason, rejected_by}, _from, state) do
+    case :ets.lookup(state.table, task_id) do
+      [{^task_id, %{pipeline: pipeline, current_stage: current_stage} = task}]
+          when is_list(pipeline) and is_integer(current_stage) ->
+        now = DateTime.utc_now()
+        workflow = Shazam.Workflow.get(task.workflow) || Shazam.Workflow.default_workflow()
+
+        # Mark current stage as rejected
+        pipeline = Shazam.Workflow.update_pipeline_stage(pipeline, current_stage, %{
+          status: :rejected,
+          output: "REJECTED by #{rejected_by}: #{reason}",
+          completed_at: now
+        })
+
+        # Find target stage to go back to
+        target_idx = Shazam.Workflow.reject_target(workflow, current_stage)
+        target_role = Shazam.Workflow.stage_role(pipeline, target_idx)
+
+        # Reset target stage to pending
+        pipeline = Shazam.Workflow.update_pipeline_stage(pipeline, target_idx, %{
+          status: :pending,
+          assigned_to: nil,
+          completed_by: nil,
+          output: nil,
+          started_at: now,
+          completed_at: nil
+        })
+
+        updated = %{task |
+          status: :pending,
+          assigned_to: nil,
+          result: nil,
+          pipeline: pipeline,
+          current_stage: target_idx,
+          required_role: target_role,
+          updated_at: now
+        }
+        :ets.insert(state.table, {task_id, updated})
+        Logger.info("[TaskBoard] Task #{task_id} stage rejected, back to stage #{target_idx}")
+        broadcast(:task_stage_rejected, updated)
+        {:reply, {:ok, updated}, schedule_save(state)}
+
+      [{^task_id, _task}] ->
+        {:reply, {:error, :no_pipeline}, state}
+
+      [] ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
   def handle_call({:goal_ancestry, task_id}, _from, state) do
     ancestry = build_ancestry(state.table, task_id, [])
     {:reply, ancestry, state}
@@ -686,8 +828,27 @@ defmodule Shazam.TaskBoard do
     end
   end
 
+  defp resolve_pipeline(attrs) do
+    workflow_name = attrs[:workflow]
+    if workflow_name && workflow_name != "" && workflow_name != "default" do
+      workspace = Application.get_env(:shazam, :workspace, nil)
+      case Shazam.Workflow.get(workflow_name, workspace) do
+        nil ->
+          {nil, nil, nil, nil}
+        workflow ->
+          pipeline = Shazam.Workflow.instantiate_pipeline(workflow)
+          first_role = Shazam.Workflow.stage_role(pipeline, 0)
+          {pipeline, 0, first_role, workflow_name}
+      end
+    else
+      {nil, nil, nil, nil}
+    end
+  rescue
+    _ -> {nil, nil, nil, nil}
+  end
+
   defp broadcast(event, task) do
-    Shazam.API.EventBus.broadcast(%{
+    payload = %{
       event: to_string(event),
       task: %{
         id: task.id,
@@ -696,6 +857,18 @@ defmodule Shazam.TaskBoard do
         assigned_to: task.assigned_to,
         created_by: task.created_by
       }
-    })
+    }
+
+    # Include pipeline info in events
+    payload = if Map.get(task, :pipeline) do
+      put_in(payload, [:task, :pipeline], task.pipeline)
+      |> put_in([:task, :current_stage], task.current_stage)
+      |> put_in([:task, :workflow], task.workflow)
+      |> put_in([:task, :required_role], task.required_role)
+    else
+      payload
+    end
+
+    Shazam.API.EventBus.broadcast(payload)
   end
 end

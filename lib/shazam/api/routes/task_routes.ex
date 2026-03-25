@@ -134,31 +134,37 @@ defmodule Shazam.API.Routes.TaskRoutes do
 
   post "/:task_id/pause" do
     company = find_company_for_task(task_id)
-    if company do
-      case Shazam.RalphLoop.pause_task(company, task_id) do
-        {:ok, _} -> json(conn, 200, %{status: "paused", task_id: task_id})
-        {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
-      end
+    result = if company do
+      Shazam.RalphLoop.pause_task(company, task_id)
     else
-      case Shazam.TaskBoard.pause(task_id) do
-        {:ok, _} -> json(conn, 200, %{status: "paused", task_id: task_id})
-        {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
-      end
+      Shazam.TaskBoard.pause(task_id)
+    end
+
+    case result do
+      {:ok, _} ->
+        case Shazam.TaskBoard.get(task_id) do
+          {:ok, task} -> json(conn, 200, %{task: serialize_task(task)})
+          _ -> json(conn, 200, %{task: %{id: task_id, status: "paused"}})
+        end
+      {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
     end
   end
 
   post "/:task_id/resume" do
     company = find_company_for_task(task_id)
-    if company do
-      case Shazam.RalphLoop.resume_task(company, task_id) do
-        {:ok, _} -> json(conn, 200, %{status: "resumed", task_id: task_id})
-        {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
-      end
+    result = if company do
+      Shazam.RalphLoop.resume_task(company, task_id)
     else
-      case Shazam.TaskBoard.resume_task(task_id) do
-        {:ok, _} -> json(conn, 200, %{status: "resumed", task_id: task_id})
-        {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
-      end
+      Shazam.TaskBoard.resume_task(task_id)
+    end
+
+    case result do
+      {:ok, _} ->
+        case Shazam.TaskBoard.get(task_id) do
+          {:ok, task} -> json(conn, 200, %{task: serialize_task(task)})
+          _ -> json(conn, 200, %{task: %{id: task_id, status: "pending"}})
+        end
+      {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
     end
   end
 
@@ -175,6 +181,35 @@ defmodule Shazam.API.Routes.TaskRoutes do
         {:error, reason} ->
           json(conn, 422, %{error: inspect(reason)})
       end
+    end
+  end
+
+  post "/:task_id/approve-stage" do
+    case Shazam.TaskBoard.get(task_id) do
+      {:ok, task} ->
+        output = conn.body_params["output"] || "Stage approved manually"
+        approved_by = conn.body_params["approved_by"] || "user"
+        case Shazam.TaskBoard.advance_stage(task_id, output, approved_by) do
+          {:completed, updated} ->
+            json(conn, 200, %{status: "completed", task: serialize_task(updated)})
+          {:ok, updated} ->
+            json(conn, 200, %{status: "advanced", task: serialize_task(updated)})
+          {:error, reason} ->
+            json(conn, 422, %{error: inspect(reason)})
+        end
+      _ ->
+        json(conn, 404, %{error: "Task not found"})
+    end
+  end
+
+  post "/:task_id/reject-stage" do
+    reason = conn.body_params["reason"] || "Rejected"
+    rejected_by = conn.body_params["rejected_by"] || "user"
+    case Shazam.TaskBoard.reject_stage(task_id, reason, rejected_by) do
+      {:ok, updated} ->
+        json(conn, 200, %{status: "rejected", task: serialize_task(updated)})
+      {:error, reason} ->
+        json(conn, 422, %{error: inspect(reason)})
     end
   end
 

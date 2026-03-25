@@ -55,8 +55,15 @@ defmodule Shazam.API.Routes.RalphRoutes do
 
   post "/resume" do
     company = conn.body_params["company"] || conn.query_params["company"] || find_first_company()
+    # Also reset circuit breaker on resume
+    Shazam.CircuitBreaker.reset()
     if company, do: Shazam.RalphLoop.resume(company)
     json(conn, 200, %{status: "resumed"})
+  end
+
+  post "/reset-circuit-breaker" do
+    Shazam.CircuitBreaker.reset()
+    json(conn, 200, %{status: "ok", circuit_breaker: "reset"})
   end
 
   put "/config" do
