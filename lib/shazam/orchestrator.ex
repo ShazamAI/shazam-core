@@ -506,7 +506,10 @@ defmodule Shazam.Orchestrator do
     cond do
       # Text delta — buffer and batch
       match?(%PartialAssistantMessage{}, message) and PartialAssistantMessage.text_delta?(message) ->
-        text = PartialAssistantMessage.get_text(message)
+        text = case PartialAssistantMessage.extract_text(message) do
+          {:ok, t} -> t
+          _ -> ""
+        end
         buffer = (Process.get(:text_delta_buffer) || "") <> (text || "")
 
         if String.length(buffer) >= @broadcast_batch_chars do

@@ -261,43 +261,14 @@ defmodule Shazam.Company do
   end
 
   def handle_call({:update_agents, agents_raw}, _from, state) do
-    # Log WHO is calling update_agents and WITH WHAT
-    names = Enum.map(agents_raw, fn a ->
-      a[:name] || a["name"] || (if is_struct(a), do: Map.get(a, :name)) || "NIL"
-    end)
-    stacktrace = Process.info(self(), :current_stacktrace) |> elem(1) |> Enum.take(5) |> inspect()
-    File.write("/tmp/shazam-update-agents.log",
-      "[#{DateTime.to_iso8601(DateTime.utc_now())}] update_agents called with #{length(agents_raw)} agents: #{inspect(names)}\n  stack: #{stacktrace}\n\n",
-      [:append])
-
-    # Reject empty or nameless agent updates
+    # Reject empty or nameless agent updates — prevents accidental overwrites
     if agents_raw == [] || (is_list(agents_raw) && Enum.all?(agents_raw, fn a ->
       name = a[:name] || a["name"] || (if is_struct(a), do: Map.get(a, :name))
       name == nil || name == ""
     end)) do
-      File.write("/tmp/shazam-update-agents.log", "  → REJECTED (empty/nameless)\n\n", [:append])
       {:reply, :ok, state}
     else
       handle_update_agents(agents_raw, state)
-    end
-  end
-
-  defp handle_update_agents(agents_raw, state) do
-    new_agents = Builder.build_agents_from_raw(agents_raw, state.name)
-
-    case Hierarchy.validate_no_cycles(new_agents) do
-      :ok ->
-        new_state = %{state | agents: new_agents}
-
-        # Re-persist
-        Builder.save_company_state(new_state)
-
-        Logger.info("[Company:#{state.name}] Agents updated: #{Enum.map_join(new_agents, ", ", & &1.name)}")
-        {:reply, :ok, new_state}
-
-      {:error, {:cycle_detected, names}} ->
-        Logger.warning("[Company:#{state.name}] Cycle detected in agent hierarchy: #{inspect(names)}")
-        {:reply, {:error, {:cycle_detected, names}}, state}
     end
   end
 
@@ -436,6 +407,22 @@ defmodule Shazam.Company do
       modules: agent.modules || [],
       subordinates: subordinates
     }
+  end
+
+  defp handle_update_agents(agents_raw, state) do
+    new_agents = Builder.build_agents_from_raw(agents_raw, state.name)
+
+    case Hierarchy.validate_no_cycles(new_agents) do
+      :ok ->
+        new_state = %{state | agents: new_agents}
+        Builder.save_company_state(new_state)
+        Logger.info("[Company:#{state.name}] Agents updated: #{Enum.map_join(new_agents, ", ", & &1.name)}")
+        {:reply, :ok, new_state}
+
+      {:error, {:cycle_detected, names}} ->
+        Logger.warning("[Company:#{state.name}] Cycle detected: #{inspect(names)}")
+        {:reply, {:error, {:cycle_detected, names}}, state}
+    end
   end
 
   defp via(name), do: {:via, Registry, {Shazam.CompanyRegistry, name}}

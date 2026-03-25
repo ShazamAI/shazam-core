@@ -93,13 +93,8 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
   @doc "Build PM prompt with subordinate list and cross-team delegation info."
   def build_pm_prompt(agent_profile) do
     try do
-      File.write("/tmp/shazam-pm-prompt.log",
-        "[#{DateTime.to_iso8601(DateTime.utc_now())}] build_pm_prompt: name=#{agent_profile.name} company_ref=#{inspect(agent_profile.company_ref)}\n",
-        [:append])
       agents = Shazam.Company.get_agents(agent_profile.company_ref)
-      File.write("/tmp/shazam-pm-prompt.log", "  got #{length(agents)} agents\n", [:append])
       subordinates = Shazam.Hierarchy.find_subordinates(agents, agent_profile.name)
-      File.write("/tmp/shazam-pm-prompt.log", "  subordinates: #{length(subordinates)}\n", [:append])
 
       if subordinates != [] do
         agent_list =

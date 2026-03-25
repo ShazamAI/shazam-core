@@ -2,7 +2,11 @@ defmodule Shazam.API.WebSocketCommands do
   @moduledoc """
   Handles TUI commands received over WebSocket in daemon mode.
   Returns a list of messages to push back to the client.
+
+  Helpers (event_msg, list_tasks, etc.) are in WebSocketCommands.Helpers.
   """
+
+  import Shazam.API.WebSocketCommands.Helpers
 
   def handle(command, conn_state) do
     company = conn_state[:company]
@@ -447,7 +451,7 @@ defmodule Shazam.API.WebSocketCommands do
 
   defp handle_qa(raw, conn_state) do
     args = String.trim_leading(raw, "/qa") |> String.trim()
-    company = conn_state[:company]
+    _company = conn_state[:company]
 
     cond do
       args == "" ->
@@ -814,92 +818,4 @@ defmodule Shazam.API.WebSocketCommands do
       "Health: ralph=#{ralph_status} | circuit=#{circuit_state} | mem=#{memory_mb}MB")
   end
 
-  # ── Helpers ──────────────────────────────────────────
-
-  defp event_msg(agent, event_type, title) do
-    %{
-      type: "event",
-      agent: agent,
-      event: event_type,
-      title: title,
-      timestamp: Calendar.strftime(DateTime.utc_now(), "%H:%M:%S")
-    }
-  end
-
-  defp list_tasks(company) do
-    try do
-      if company do
-        Shazam.TaskBoard.list(%{company: company})
-      else
-        Shazam.TaskBoard.list()
-      end
-    catch
-      _, _ -> []
-    end
-  end
-
-  defp get_task_counts(company) do
-    tasks = list_tasks(company)
-    pending = Enum.count(tasks, &(to_string(&1.status) == "pending"))
-    running = Enum.count(tasks, &(to_string(&1.status) in ["in_progress", "running"]))
-    done = Enum.count(tasks, &(to_string(&1.status) in ["completed", "failed"]))
-    awaiting = Enum.count(tasks, &(to_string(&1.status) == "awaiting_approval"))
-    {pending, running, done, awaiting}
-  end
-
-  defp get_ralph_status(company) do
-    try do
-      if company && Shazam.RalphLoop.exists?(company) do
-        case Shazam.RalphLoop.status(company) do
-          %{paused: false} -> "running"
-          %{paused: true} -> "paused"
-          _ -> "idle"
-        end
-      else
-        "idle"
-      end
-    catch
-      _, _ -> "idle"
-    end
-  end
-
-  defp find_pm_name(agents) do
-    case Enum.find(agents, fn a ->
-      role = String.downcase(to_string(a[:role] || ""))
-      supervisor = a[:supervisor]
-      (String.contains?(role, "manager") or String.contains?(role, "pm")) and supervisor == nil
-    end) do
-      nil ->
-        case Enum.find(agents, fn a ->
-          role = String.downcase(to_string(a[:role] || ""))
-          String.contains?(role, "manager") or String.contains?(role, "pm")
-        end) do
-          nil -> "pm"
-          agent -> to_string(agent[:name] || "pm")
-        end
-      agent -> to_string(agent[:name] || "pm")
-    end
-  end
-
-  defp wait_for_ralph(company, retries) when retries > 0 do
-    if Shazam.RalphLoop.exists?(company) do
-      :ok
-    else
-      Process.sleep(500)
-      wait_for_ralph(company, retries - 1)
-    end
-  end
-
-  defp wait_for_ralph(_, _), do: :ok
-
-  defp help_text do
-    """
-    Commands: /start, /stop, /resume, /restart, /status, /dashboard, /config, /health
-    Tasks: /task <desc>, /tasks, /approve <id>, /aa, /reject <id>, /retry-task <id>, /kill-task <id>
-    Agents: /agents, /org
-    Plans: /plan <desc>, /plan --list, /plan --show <id>, /plan --approve <id>
-    Plugins: /plugins, /plugins reload
-    Other: /help, /clear, /quit
-    """
-  end
 end
