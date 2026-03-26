@@ -56,6 +56,7 @@ defmodule Shazam.HotReload do
     Shazam.API.Routes.MiscRoutes,
     Shazam.API.Routes.ProjectRoutes,
     Shazam.API.Routes.FileRoutes,
+    Shazam.API.Routes.PlanRoutes,
   ]
 
   @doc """

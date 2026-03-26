@@ -44,6 +44,20 @@ defmodule Shazam.API.Routes.PlanRoutes do
         _, _ -> "pm"
       end
 
+      # Save an initial draft plan file so it appears in the list immediately
+      draft_plan = %{
+        id: plan_id,
+        title: String.slice(description, 0..80),
+        status: "draft",
+        summary: description,
+        created_at: DateTime.to_iso8601(DateTime.utc_now()),
+        tasks: [],
+        architecture: %{},
+        risks: []
+      }
+      Shazam.PlanManager.ensure_dir()
+      Shazam.PlanManager.save_plan(draft_plan)
+
       # Create planning task for PM
       case Shazam.TaskBoard.create(%{
         title: "Create plan: #{String.slice(description, 0..80)}",
@@ -52,7 +66,7 @@ defmodule Shazam.API.Routes.PlanRoutes do
         company: company,
         description: prompt <> "\n\nPlan ID: #{plan_id}"
       }) do
-        {:ok, task} -> json(conn, 201, %{plan_id: plan_id, task_id: task.id, status: "planning"})
+        {:ok, task} -> json(conn, 201, %{plan_id: plan_id, task_id: task.id, status: "draft"})
         {:error, reason} -> json(conn, 500, %{error: inspect(reason)})
       end
     end
