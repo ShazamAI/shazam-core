@@ -46,6 +46,7 @@ defmodule Shazam.API.Router do
   forward "/api/ralph-loop", to: Shazam.API.Routes.RalphRoutes
   forward "/api/workspace",  to: Shazam.API.Routes.WorkspaceRoutes
   forward "/api/skills",     to: Shazam.API.Routes.SkillRoutes
+  forward "/api/plans",      to: Shazam.API.Routes.PlanRoutes
 
   # Sessions, metrics, memory-banks, workspaces list, health, presets,
   # templates, and agent inbox all live under /api with varied sub-paths.

@@ -142,6 +142,11 @@ defmodule Shazam.TaskBoard do
     GenServer.call(__MODULE__, {:reassign, task_id, new_agent}, @call_timeout)
   end
 
+  @doc "Updates task fields (title, description, assigned_to)."
+  def update(task_id, updates) do
+    GenServer.call(__MODULE__, {:update, task_id, updates}, @call_timeout)
+  end
+
   @doc "Fetches a task by ID."
   def get(task_id) do
     GenServer.call(__MODULE__, {:get, task_id}, @call_timeout)
@@ -643,6 +648,28 @@ defmodule Shazam.TaskBoard do
         :ets.insert(state.table, {task_id, updated})
         Logger.info("[TaskBoard] Task #{task_id} reassigned: #{old_agent} → #{new_agent} (status: #{task.status} → #{new_status})")
         broadcast(:task_reassigned, updated)
+        {:reply, {:ok, updated}, schedule_save(state)}
+
+      [] ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:update, task_id, updates}, _from, state) do
+    case :ets.lookup(state.table, task_id) do
+      [{^task_id, task}] ->
+        allowed = [:title, :description, :assigned_to]
+        updated = Enum.reduce(allowed, task, fn key, acc ->
+          case Map.fetch(updates, key) do
+            {:ok, val} -> Map.put(acc, key, val)
+            :error -> acc
+          end
+        end)
+        updated = Map.put(updated, :updated_at, DateTime.utc_now())
+        :ets.insert(state.table, {task_id, updated})
+        Logger.info("[TaskBoard] Task #{task_id} updated")
+        broadcast(:task_updated, updated)
+        spawn(fn -> Shazam.TaskFiles.write_task(updated) end)
         {:reply, {:ok, updated}, schedule_save(state)}
 
       [] ->

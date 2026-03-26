@@ -168,6 +168,15 @@ defmodule Shazam.API.Routes.CompanyRoutes do
             |> maybe_update(:supervisor, updates["supervisor"])
             |> maybe_update(:role, updates["role"])
             |> maybe_update(:domain, updates["domain"])
+            |> maybe_update(:budget, updates["budget"])
+            |> maybe_update(:model, updates["model"])
+            |> maybe_update(:provider, updates["provider"])
+            |> maybe_update(:fallback_model, updates["fallback_model"])
+            |> maybe_update(:tools, updates["tools"])
+            |> maybe_update(:skills, updates["skills"])
+            |> maybe_update(:modules, updates["modules"])
+            |> maybe_update(:system_prompt, updates["system_prompt"])
+            |> maybe_update(:heartbeat_interval, updates["heartbeat_interval"])
           else
             agent
           end

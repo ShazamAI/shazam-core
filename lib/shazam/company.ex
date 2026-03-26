@@ -241,6 +241,12 @@ defmodule Shazam.Company do
   def handle_call(:get_agents_full, _from, state) do
     agents_data =
       Enum.map(state.agents, fn a ->
+        metrics = try do
+          Shazam.Metrics.get_agent(a.name) || %{}
+        catch
+          _, _ -> %{}
+        end
+
         %{
           name: a.name,
           role: a.role,
@@ -253,7 +259,8 @@ defmodule Shazam.Company do
           modules: a.modules,
           system_prompt: a.system_prompt,
           model: a.model,
-          fallback_model: a.fallback_model
+          fallback_model: a.fallback_model,
+          tokens_used: metrics[:total_tokens] || 0
         }
       end)
 

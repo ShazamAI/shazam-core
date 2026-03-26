@@ -235,6 +235,29 @@ defmodule Shazam.API.Routes.TaskRoutes do
     end
   end
 
+  put "/:task_id" do
+    updates =
+      conn.body_params
+      |> Enum.reduce(%{}, fn
+        {"title", v}, acc when is_binary(v) -> Map.put(acc, :title, v)
+        {"description", v}, acc when is_binary(v) -> Map.put(acc, :description, v)
+        {"assigned_to", v}, acc when is_binary(v) -> Map.put(acc, :assigned_to, v)
+        _, acc -> acc
+      end)
+
+    case Shazam.TaskBoard.update(task_id, updates) do
+      {:ok, task} ->
+        Shazam.API.EventBus.broadcast(%{event: "task_updated", task: serialize_task(task)})
+        json(conn, 200, %{task: serialize_task(task)})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{error: "Task not found"})
+
+      {:error, reason} ->
+        json(conn, 422, %{error: inspect(reason)})
+    end
+  end
+
   match _ do
     json(conn, 404, %{error: "Not found"})
   end
