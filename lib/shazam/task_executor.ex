@@ -19,7 +19,7 @@ defmodule Shazam.TaskExecutor do
     skills_prompt = PromptBuilder.build_skills_prompt(agent_profile.skills)
     modules_prompt = PromptBuilder.build_modules_prompt(agent_profile.modules)
     memory_prompt = SkillMemory.build_prompt(agent_profile)
-    pm_prompt = PromptBuilder.build_pm_prompt(agent_profile)
+    pm_prompt = PromptBuilder.build_team_prompt(agent_profile)
     designer_prompt = PromptBuilder.build_designer_context(agent_profile)
     analyst_prompt = PromptBuilder.build_analyst_context(agent_profile)
     role_rules_prompt = PromptBuilder.build_role_rules(agent_profile)
@@ -29,7 +29,7 @@ defmodule Shazam.TaskExecutor do
       Logger.info("[RalphLoop] Agent '#{agent_profile.name}' is a PM — using Haiku for speed")
       "claude-haiku-4-5-20251001"
     else
-      agent_profile.model
+      Shazam.ModelRouter.resolve(task, agent_profile)
     end
 
     tools = if is_pm, do: [], else: agent_profile.tools
@@ -45,20 +45,14 @@ defmodule Shazam.TaskExecutor do
       agents = Shazam.Company.get_agents(company_name)
       Shazam.AgentQuery.build_instruction(agent_profile.name, agents)
     catch
-      _, _ -> ""
+      kind, reason ->
+        Logger.debug("[TaskExecutor] Failed to build agent query instruction: #{inspect(kind)}: #{inspect(reason)}")
+        ""
     end
 
     # Check if agent has a specific workspace (resolve early for prompt)
     agent_workspace = Map.get(agent_profile, :workspace, nil)
-    workspace = if agent_workspace do
-      workspaces = Application.get_env(:shazam, :workspaces, %{})
-      case Map.get(workspaces, agent_workspace) do
-        %{path: path} when is_binary(path) -> path
-        _ -> Application.get_env(:shazam, :workspace, nil)
-      end
-    else
-      Application.get_env(:shazam, :workspace, nil)
-    end
+    workspace = Shazam.Config.workspace(agent_profile)
     # Build workspace enforcement prompt
     workspace_prompt = if agent_workspace && workspace do
       """
@@ -132,7 +126,7 @@ defmodule Shazam.TaskExecutor do
       Shazam.Metrics.set_status(agent_profile.name, "working")
       Shazam.API.EventBus.broadcast(%{
         event: "agent_output", agent: agent_profile.name,
-        text: "Working on: #{String.slice(task.title || "", 0..80)} (#{provider_mod.name()})"
+        type: "text", content: "Working on: #{String.slice(task.title || "", 0..80)} (#{provider_mod.name()})"
       })
 
       result = provider_mod.execute(:stateless, prompt,
@@ -193,21 +187,23 @@ defmodule Shazam.TaskExecutor do
     else
 
     # Session-based providers (ClaudeCode) use SessionPool
-    case Shazam.SessionPool.checkout(agent_profile.name, session_opts) do
+    case Shazam.SessionPool.checkout(company_name, agent_profile.name, session_opts) do
       {:ok, session_pid, session_type} ->
         # Build prompt based on session type:
         # :new → full context (role, ancestry, memory instructions)
         # :reused → lean prompt (just the task — agent already has context)
         prompt = PromptBuilder.build_task_prompt(agent_profile, task, session_type)
 
-        # Inject context for new sessions (reused sessions already have history)
+        # Inject context based on session type:
+        # :new → full context (history, learnings, team activity, git)
+        # :reused → lean (just git context — agent already has memories/history)
         prompt = if session_type == :new do
           context = Shazam.ContextManager.build_context(agent_profile.name, task)
           prompt = if context != "", do: context <> "\n\n" <> prompt, else: prompt
-          # Inject git context before the task prompt
           if git_context != "", do: git_context <> "\n\n" <> prompt, else: prompt
         else
-          prompt
+          # Reused session: still inject git context (it changes between tasks)
+          if git_context != "", do: git_context <> "\n\n" <> prompt, else: prompt
         end
 
         # Plugin hook: before_query (can mutate prompt or halt)
@@ -225,7 +221,7 @@ defmodule Shazam.TaskExecutor do
         Shazam.API.EventBus.broadcast(%{
           event: "agent_output",
           agent: agent_profile.name,
-          text: "Working on: #{String.slice(task.title || "", 0..80)}"
+          type: "text", content: "Working on: #{String.slice(task.title || "", 0..80)}"
         })
 
         Shazam.Metrics.set_status(agent_profile.name, "working")
@@ -274,7 +270,7 @@ defmodule Shazam.TaskExecutor do
         Shazam.Metrics.set_status(agent_profile.name, "idle")
 
         # Check-in (mark as available for next task)
-        Shazam.SessionPool.checkin(agent_profile.name)
+        Shazam.SessionPool.checkin(company_name, agent_profile.name)
 
         case result do
           {:ok, text, files} -> {:ok, text, files}
@@ -310,6 +306,7 @@ defmodule Shazam.TaskExecutor do
   # Delegate prompt builders for backward compatibility
   defdelegate build_skills_prompt(skills), to: PromptBuilder
   defdelegate build_modules_prompt(modules), to: PromptBuilder
+  defdelegate build_team_prompt(agent_profile), to: PromptBuilder
   defdelegate build_pm_prompt(agent_profile), to: PromptBuilder
   defdelegate build_designer_context(agent_profile), to: PromptBuilder
   defdelegate build_analyst_context(agent_profile), to: PromptBuilder

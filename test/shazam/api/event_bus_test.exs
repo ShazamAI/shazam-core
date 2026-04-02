@@ -3,6 +3,12 @@ defmodule Shazam.API.EventBusTest do
 
   @moduletag :event_bus
 
+  setup do
+    # Ensure EventBus GenServer is running (may have been killed by other tests)
+    unless GenServer.whereis(Shazam.API.EventBus), do: Shazam.API.EventBus.start_link([])
+    :ok
+  end
+
   describe "broadcast/1 and recent_events/0" do
     test "stores events in buffer" do
       Shazam.API.EventBus.broadcast(%{event: "test_event_1", data: "hello"})

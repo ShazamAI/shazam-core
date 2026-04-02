@@ -5,7 +5,7 @@ defmodule Shazam.PlanManager do
 
   @doc "Returns the resolved plans directory path for the current workspace."
   def plans_dir do
-    workspace = Application.get_env(:shazam, :workspace, File.cwd!())
+    workspace = Shazam.Config.global_workspace()
     Path.join(workspace, @plans_dir)
   end
 
@@ -264,14 +264,16 @@ defmodule Shazam.PlanManager do
   # ── Private ──────────────────────────────────────────────
 
   defp render_plan(plan) do
+    summary_line = if plan[:summary] && plan[:summary] != "", do: "summary: \"#{String.replace(plan[:summary] || "", "\"", "\\\"")}\"", else: nil
     frontmatter = [
       "---",
       "id: #{plan.id}",
       "title: \"#{plan.title}\"",
       "status: #{plan.status}",
       "created_at: #{plan[:created_at] || DateTime.to_iso8601(DateTime.utc_now())}",
+      summary_line,
       "---"
-    ] |> Enum.join("\n")
+    ] |> Enum.reject(&is_nil/1) |> Enum.join("\n")
 
     # Group tasks by phase
     phases = plan.tasks
@@ -302,6 +304,7 @@ defmodule Shazam.PlanManager do
           title: meta["title"] || "Untitled Plan",
           status: meta["status"] || "draft",
           created_at: meta["created_at"],
+          summary: meta["summary"],
           tasks: tasks
         }}
       _ -> {:error, :invalid_format}

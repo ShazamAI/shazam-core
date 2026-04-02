@@ -157,6 +157,7 @@ defmodule Shazam.Provider.ClaudeCode do
         cost_usd = result_msg.total_cost_usd || 0.0
 
         Shazam.Metrics.record_tokens(agent_name, total_tokens, cost_usd)
+        Shazam.Metrics.record_context(agent_name, input_tokens, output_tokens)
 
         Shazam.API.EventBus.broadcast(%{
           event: "agent_output", agent: agent_name, type: "text",

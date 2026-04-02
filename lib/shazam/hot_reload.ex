@@ -27,6 +27,7 @@ defmodule Shazam.HotReload do
     Shazam.AgentQuery,
     Shazam.AgentInbox,
     Shazam.PluginManager,
+    Shazam.Webhook,
     Shazam.ProjectRegistry,
     Shazam.FileWatcher,
     Shazam.PlanManager,
@@ -35,6 +36,9 @@ defmodule Shazam.HotReload do
     Shazam.Store,
     Shazam.FileLogger,
     Shazam.TaskFiles,
+    Shazam.ModelRouter,
+    Shazam.Doctor,
+    Shazam.MemoryConsolidator,
 
     # Providers
     Shazam.Provider.ClaudeCode,
@@ -57,6 +61,11 @@ defmodule Shazam.HotReload do
     Shazam.API.Routes.ProjectRoutes,
     Shazam.API.Routes.FileRoutes,
     Shazam.API.Routes.PlanRoutes,
+    Shazam.ConfigSync,
+    Shazam.ConfigSync.ClaudeGenerator,
+    Shazam.ConfigSync.GeminiGenerator,
+    Shazam.ConfigSync.CursorGenerator,
+    Shazam.ConfigSync.CodexGenerator,
   ]
 
   @doc """

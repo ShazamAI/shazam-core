@@ -1,6 +1,8 @@
 defmodule Shazam.API.WebSocketCommands.Helpers do
   @moduledoc "Shared helpers for WebSocket command handlers."
 
+  require Logger
+
   @doc "Builds a standardized event message map for WebSocket push."
   def event_msg(agent, event_type, title) do
     %{
@@ -21,7 +23,9 @@ defmodule Shazam.API.WebSocketCommands.Helpers do
         Shazam.TaskBoard.list()
       end
     catch
-      _, _ -> []
+      kind, reason ->
+        Logger.debug("[WebSocket.Helpers] Failed to list tasks: #{inspect(kind)}: #{inspect(reason)}")
+        []
     end
   end
 
@@ -48,7 +52,9 @@ defmodule Shazam.API.WebSocketCommands.Helpers do
         "idle"
       end
     catch
-      _, _ -> "idle"
+      kind, reason ->
+        Logger.debug("[WebSocket.Helpers] Failed to get ralph status: #{inspect(kind)}: #{inspect(reason)}")
+        "idle"
     end
   end
 

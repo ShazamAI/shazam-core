@@ -51,7 +51,7 @@ defmodule Shazam.Orchestrator.Streaming do
               event: "agent_output",
               agent: agent_name,
               type: "tool_use",
-              content: "#{tool_name}: #{inspect(input, limit: 200)}"
+              content: %{name: tool_name, input: input}
             })
 
           %Content.TextBlock{text: text} ->
@@ -79,6 +79,7 @@ defmodule Shazam.Orchestrator.Streaming do
 
         # Record token usage in metrics
         Shazam.Metrics.record_tokens(agent_name, total_tokens, cost_usd)
+        Shazam.Metrics.record_context(agent_name, input_tokens, output_tokens)
 
         # Broadcast usage event
         Shazam.API.EventBus.broadcast(%{

@@ -1,6 +1,8 @@
 defmodule Shazam.TaskFiles do
   @moduledoc "Sync tasks between ETS TaskBoard and .shazam/tasks/ markdown files."
 
+  require Logger
+
   @tasks_dir ".shazam/tasks"
 
   @doc "Returns the tasks directory path for the current workspace."
@@ -101,7 +103,9 @@ defmodule Shazam.TaskFiles do
         |> Enum.map(& &1.id)
         |> MapSet.new()
       catch
-        _, _ -> MapSet.new()
+        kind, reason ->
+          Logger.warning("[TaskFiles] Failed to list existing tasks: #{inspect(kind)}: #{inspect(reason)}")
+          MapSet.new()
       end
 
       Enum.each(tasks, fn task_map ->
@@ -111,7 +115,9 @@ defmodule Shazam.TaskFiles do
             Shazam.TaskBoard.list()
             |> Enum.any?(fn t -> t.title == task_map.title and t.company == task_map[:company] end)
           catch
-            _, _ -> false
+            kind, reason ->
+              Logger.debug("[TaskFiles] Failed to check duplicate task '#{task_map.title}': #{inspect(kind)}: #{inspect(reason)}")
+              false
           end
 
         unless already_exists do
@@ -160,7 +166,9 @@ defmodule Shazam.TaskFiles do
           try do
             Shazam.TaskBoard.import_task(task)
           catch
-            _, _ -> :ok
+            kind, reason ->
+              Logger.warning("[TaskFiles] Failed to import task '#{task.id}': #{inspect(kind)}: #{inspect(reason)}")
+              :ok
           end
         end
       end)
@@ -283,7 +291,9 @@ defmodule Shazam.TaskFiles do
         nil
     end
   rescue
-    _ -> nil
+    e ->
+      Logger.debug("[TaskFiles] Failed to parse task file #{path}: #{Exception.message(e)}")
+      nil
   end
 
   defp parse_frontmatter(text) do

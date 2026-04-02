@@ -1,8 +1,20 @@
 defmodule Shazam.TaskBoard do
   @moduledoc """
-  Task system with atomic checkout using ETS.
-  Each task has goal ancestry — the agent knows the what and the why.
-  Automatically persists to disk via Shazam.Store.
+  ETS-backed task management with persistence.
+
+  ## Task Status Flow
+  ```
+  pending ──────→ in_progress (checkout by agent)
+  in_progress ──→ completed (agent finishes successfully)
+  in_progress ──→ failed (agent encounters error)
+  pending ──────→ awaiting_approval (created with approval required)
+  awaiting_approval → pending (approved)
+  awaiting_approval → rejected (rejected)
+  pending | in_progress → paused (manual pause)
+  paused ──────→ pending (resume)
+  completed | failed | rejected → pending (retry)
+  any ──────────→ deleted (soft delete)
+  ```
   """
 
   use GenServer
@@ -11,7 +23,7 @@ defmodule Shazam.TaskBoard do
   alias Shazam.Store
   alias Shazam.TaskBoard.Persistence
 
-  @type status :: :pending | :in_progress | :completed | :failed | :awaiting_approval | :paused
+  @type status :: :pending | :in_progress | :completed | :failed | :awaiting_approval | :paused | :deleted | :rejected
   @type task :: %{
           id: String.t(),
           title: String.t(),
@@ -132,6 +144,11 @@ defmodule Shazam.TaskBoard do
     GenServer.call(__MODULE__, {:import_task, task}, @call_timeout)
   end
 
+  @doc "Re-import task files from a workspace. Called when a project starts."
+  def reimport_from_workspace(workspace) do
+    GenServer.call(__MODULE__, {:reimport_workspace, workspace}, :timer.seconds(30))
+  end
+
   @doc "Clears all tasks from the board."
   def clear_all do
     GenServer.call(__MODULE__, :clear_all, @call_timeout)
@@ -179,9 +196,13 @@ defmodule Shazam.TaskBoard do
     counter = try do
       import_from_task_files(table, counter)
     rescue
-      _ -> counter
+      e ->
+        Logger.warning("[TaskBoard] Failed to import task files: #{Exception.message(e)}")
+        counter
     catch
-      _, _ -> counter
+      kind, reason ->
+        Logger.warning("[TaskBoard] Failed to import task files: #{inspect(kind)}: #{inspect(reason)}")
+        counter
     end
 
     Logger.info("[TaskBoard] Started with #{:ets.info(table, :size)} task(s)")
@@ -189,13 +210,12 @@ defmodule Shazam.TaskBoard do
   end
 
   defp import_from_task_files(table, counter) do
-    workspace = Application.get_env(:shazam, :workspace, nil)
-    dir = if workspace do
-      Path.join(workspace, ".shazam/tasks")
-    else
-      # Try cwd as fallback
-      Path.join(File.cwd!(), ".shazam/tasks")
-    end
+    workspace = Shazam.Config.global_workspace()
+    dir = Path.join(workspace, ".shazam/tasks")
+    import_from_task_files_dir(table, counter, dir)
+  end
+
+  defp import_from_task_files_dir(table, counter, dir) do
 
     if File.dir?(dir) do
       dir
@@ -297,13 +317,19 @@ defmodule Shazam.TaskBoard do
       {:ok, attrs} ->
         # Deduplication check — skip if identical task already exists
         title = attrs[:title] || "Untitled"
-        existing = :ets.tab2list(state.table)
+        force = attrs[:force] || false
+
+        existing = if force do
+          nil
+        else
+          :ets.tab2list(state.table)
           |> Enum.find(fn {_id, t} ->
             t.title == title and
             t.assigned_to == attrs[:assigned_to] and
-            t.status in [:pending, :in_progress] and
+            t.status in [:pending, :in_progress, :awaiting_approval] and
             Map.get(t, :company) == attrs[:company]
           end)
+        end
 
         if existing do
           {_id, dup_task} = existing
@@ -342,6 +368,7 @@ defmodule Shazam.TaskBoard do
 
           :ets.insert(state.table, {id, task})
           Logger.info("[TaskBoard] Task created: #{id} - #{task.title}")
+          Shazam.AuditLog.record("task_created", %{task_id: id, title: task.title})
           broadcast(:task_created, task)
           spawn(fn -> Shazam.TaskFiles.write_task(task) end)
 
@@ -399,6 +426,7 @@ defmodule Shazam.TaskBoard do
         updated = %{task | status: :pending, updated_at: DateTime.utc_now()}
         :ets.insert(state.table, {task_id, updated})
         Logger.info("[TaskBoard] Task #{task_id} approved → pending")
+        Shazam.AuditLog.record("task_approved", %{task_id: task_id})
         broadcast(:task_approved, updated)
         spawn(fn -> Shazam.TaskFiles.update_status(task_id, :pending) end)
         {:reply, {:ok, updated}, schedule_save(state)}
@@ -564,9 +592,10 @@ defmodule Shazam.TaskBoard do
           |> Map.put(:updated_at, DateTime.utc_now())
         :ets.insert(state.table, {task_id, updated})
         Logger.info("[TaskBoard] Task #{task_id} soft-deleted")
+        Shazam.AuditLog.record("task_deleted", %{task_id: task_id})
         broadcast(:task_deleted, updated)
         spawn(fn -> Shazam.TaskFiles.update_status(task_id, :deleted) end)
-        {:reply, :ok, schedule_save(state)}
+        {:reply, {:ok, updated}, schedule_save(state)}
 
       [] ->
         {:reply, {:error, :not_found}, state}
@@ -578,7 +607,7 @@ defmodule Shazam.TaskBoard do
       [{^task_id, _task}] ->
         :ets.delete(state.table, task_id)
         Logger.info("[TaskBoard] Task #{task_id} permanently purged")
-        {:reply, :ok, schedule_save(state)}
+        {:reply, {:ok, task_id}, schedule_save(state)}
 
       [] ->
         {:reply, {:error, :not_found}, state}
@@ -815,6 +844,20 @@ defmodule Shazam.TaskBoard do
   def handle_call({:goal_ancestry, task_id}, _from, state) do
     ancestry = build_ancestry(state.table, task_id, [])
     {:reply, ancestry, state}
+  end
+
+  def handle_call({:reimport_workspace, workspace}, _from, state) do
+    dir = Path.join(workspace, ".shazam/tasks")
+    if File.dir?(dir) do
+      before = :ets.info(state.table, :size)
+      counter = import_from_task_files_dir(state.table, state.counter, dir)
+      after_count = :ets.info(state.table, :size)
+      imported = after_count - before
+      Logger.info("[TaskBoard] Re-imported #{imported} tasks from #{dir} (total: #{after_count})")
+      {:reply, {:ok, imported}, %{state | counter: counter}}
+    else
+      {:reply, {:ok, 0}, state}
+    end
   end
 
   @impl true

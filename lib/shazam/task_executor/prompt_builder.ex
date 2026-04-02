@@ -90,71 +90,100 @@ defmodule Shazam.TaskExecutor.PromptBuilder do
     "\n\n## Modules under your responsibility\nYou must focus EXCLUSIVELY on the following project modules. Do not modify files outside these paths:\n\n#{modules_text}"
   end
 
-  @doc "Build PM prompt with subordinate list and cross-team delegation info."
-  def build_pm_prompt(agent_profile) do
-    try do
-      agents = Shazam.Company.get_agents(agent_profile.company_ref)
-      subordinates = Shazam.Hierarchy.find_subordinates(agents, agent_profile.name)
+  @doc "Build team prompt for ANY agent that has subordinates (PM or lead with reports)."
+  def build_team_prompt(agent_profile) do
+    company = agent_profile.company_ref
+    if !company do
+      ""
+    else
+      try do
+        agents = Shazam.Company.get_agents(company)
+        # Find subordinates of THIS agent (not just top-level)
+        subordinates = Enum.filter(agents, fn a -> a.supervisor == agent_profile.name end)
 
-      if subordinates != [] do
-        agent_list =
-          subordinates
-          |> Enum.map(fn a ->
-            modules_info = case a.modules do
-              [] -> ""
-              nil -> ""
-              mods -> " | Modules: #{Enum.map_join(mods, ", ", fn m -> m["name"] || m[:name] || "" end)}"
-            end
-            domain_info = if a.domain, do: " [#{a.domain}]", else: ""
-            "- #{a.name}: #{a.role}#{domain_info}#{modules_info}"
-          end)
-          |> Enum.join("\n")
+        if subordinates == [] do
+          ""
+        else
+          agent_list =
+            subordinates
+            |> Enum.map(fn a ->
+              modules_info = case a.modules do
+                [] -> ""
+                nil -> ""
+                mods -> " | Modules: #{Enum.map_join(mods, ", ", fn m -> m["name"] || m[:name] || "" end)}"
+              end
+              domain_info = if a.domain, do: " [#{a.domain}]", else: ""
+              "- #{a.name}: #{a.role}#{domain_info}#{modules_info}"
+            end)
+            |> Enum.join("\n")
 
-        # Find other PMs/teams for cross-team delegation
-        my_subordinate_names = MapSet.new(subordinates, & &1.name)
-        other_pms =
-          agents
-          |> Enum.reject(fn a -> a.name == agent_profile.name end)
-          |> Enum.filter(fn a ->
-            subs = Shazam.Hierarchy.find_subordinates(agents, a.name)
-            subs != [] and not MapSet.member?(my_subordinate_names, a.name)
-          end)
+          is_pm = agent_profile.supervisor == nil ||
+            (agent_profile.role && agent_profile.role |> String.downcase() |> String.contains?("manager"))
 
-        cross_team_section =
-          if other_pms != [] do
-            other_list =
-              other_pms
-              |> Enum.map(fn pm ->
-                pm_subs = Shazam.Hierarchy.find_subordinates(agents, pm.name)
-                sub_roles = pm_subs |> Enum.map(fn s -> "#{s.name} (#{s.role})" end) |> Enum.join(", ")
-                domain_info = if pm.domain, do: " [#{pm.domain}]", else: ""
-                "- #{pm.name}: #{pm.role}#{domain_info} → manages: #{sub_roles}"
+          if is_pm do
+            # PM gets full delegation instructions + cross-team info
+            # Find other PMs/teams for cross-team delegation
+            my_subordinate_names = MapSet.new(subordinates, & &1.name)
+            other_pms =
+              agents
+              |> Enum.reject(fn a -> a.name == agent_profile.name end)
+              |> Enum.filter(fn a ->
+                subs = Enum.filter(agents, fn s -> s.supervisor == a.name end)
+                subs != [] and not MapSet.member?(my_subordinate_names, a.name)
               end)
-              |> Enum.join("\n")
 
-            """
+            cross_team_section =
+              if other_pms != [] do
+                other_list =
+                  other_pms
+                  |> Enum.map(fn pm ->
+                    pm_subs = Enum.filter(agents, fn s -> s.supervisor == pm.name end)
+                    sub_roles = pm_subs |> Enum.map(fn s -> "#{s.name} (#{s.role})" end) |> Enum.join(", ")
+                    domain_info = if pm.domain, do: " [#{pm.domain}]", else: ""
+                    "- #{pm.name}: #{pm.role}#{domain_info} → manages: #{sub_roles}"
+                  end)
+                  |> Enum.join("\n")
 
-            ### Cross-team delegation
-            When a task requires work from another team (e.g. analysis findings that need development, bug fixes from QA), you can assign subtasks to these other PMs:
-            #{other_list}
+                """
 
-            Assign the subtask to the OTHER PM's name — they will break it down for their own team.
-            Example: if analysis results need development, assign to the development PM, not directly to a developer.
-            """
+                ### Cross-team delegation
+                When a task requires work from another team (e.g. analysis findings that need development, bug fixes from QA), you can assign subtasks to these other PMs:
+                #{other_list}
+
+                Assign the subtask to the OTHER PM's name — they will break it down for their own team.
+                Example: if analysis results need development, assign to the development PM, not directly to a developer.
+                """
+              else
+                ""
+              end
+
+            pm_instructions() <> "\n### Your subordinates:\n#{agent_list}\n" <> cross_team_section
           else
-            ""
-          end
+            # Non-PM with subordinates (e.g., dev lead with QA reports)
+            """
 
-        pm_instructions() <> "\n### Your subordinates:\n#{agent_list}\n" <> cross_team_section
-      else
-        ""
+            ## Your Reports
+            #{agent_list}
+
+            You can delegate specific tasks to your reports (e.g., testing, review).
+            Output delegated tasks as JSON:
+            ```subtasks
+            [{"title": "...", "description": "...", "assigned_to": "agent_name", "depends_on": null}]
+            ```
+            """
+          end
+        end
+      rescue
+        _ -> ""
+      catch
+        :exit, _ -> ""
       end
-    rescue
-      _ -> ""
-    catch
-      :exit, _ -> ""
     end
   end
+
+  @doc false
+  # Backward compatibility — delegates to build_team_prompt
+  def build_pm_prompt(agent_profile), do: build_team_prompt(agent_profile)
 
   @doc "Build designer context prompt."
   def build_designer_context(agent_profile) do

@@ -15,9 +15,13 @@ defmodule Shazam.SubtaskParser do
     agents = try do
       Shazam.Company.get_agents(company_name)
     rescue
-      _ -> []
+      e ->
+        Logger.warning("[SubtaskParser] Failed to get agents for subtask creation: #{Exception.message(e)}")
+        []
     catch
-      :exit, _ -> []
+      :exit, reason ->
+        Logger.warning("[SubtaskParser] Exit getting agents for subtask creation: #{inspect(reason)}")
+        []
     end
 
     if agents != [] do
@@ -103,4 +107,17 @@ defmodule Shazam.SubtaskParser do
   end
 
   def extract_subtasks_json(_), do: :no_subtasks
+
+  @doc "Check if agent output contains a collaboration request (@agent_name message pattern)."
+  def check_for_collaboration(output, agent_name) when is_binary(output) do
+    Regex.scan(~r/@(\w+)\s+(.+?)(?:\n|$)/, output)
+    |> Enum.each(fn [_full, target_agent, message] ->
+      if target_agent != agent_name do
+        Shazam.AgentInbox.push_from_agent(target_agent, agent_name, String.trim(message))
+        Logger.info("[Collaboration] #{agent_name} -> #{target_agent}: #{String.slice(message, 0..50)}")
+      end
+    end)
+  end
+
+  def check_for_collaboration(_, _), do: :ok
 end

@@ -172,5 +172,162 @@ defmodule Shazam.TaskExecutor.PromptBuilderTest do
 
       assert PromptBuilder.build_pipeline_context(task) == ""
     end
+
+    test "returns pipeline context for multi-stage pipeline at first stage" do
+      task = %{
+        pipeline: [
+          %{name: "develop", role: "dev", status: :pending, output: nil, completed_by: nil,
+            assigned_to: nil, started_at: nil, completed_at: nil},
+          %{name: "review", role: "reviewer", status: :pending, output: nil, completed_by: nil,
+            assigned_to: nil, started_at: nil, completed_at: nil}
+        ],
+        current_stage: 0,
+        workflow: "feature"
+      }
+
+      result = PromptBuilder.build_pipeline_context(task)
+      assert result =~ "Workflow Pipeline"
+      assert result =~ "feature"
+      assert result =~ "Stage 1/2"
+      assert result =~ "[CURRENT]"
+      assert result =~ "[PENDING]"
+    end
+
+    test "returns pipeline context with previous stage output" do
+      task = %{
+        pipeline: [
+          %{name: "develop", role: "dev", status: :completed, output: "Implemented the feature",
+            completed_by: "dev1", assigned_to: "dev1", started_at: nil, completed_at: nil},
+          %{name: "review", role: "reviewer", status: :in_progress, output: nil, completed_by: nil,
+            assigned_to: "reviewer1", started_at: nil, completed_at: nil},
+          %{name: "qa", role: "qa", status: :pending, output: nil, completed_by: nil,
+            assigned_to: nil, started_at: nil, completed_at: nil}
+        ],
+        current_stage: 1,
+        workflow: "feature"
+      }
+
+      result = PromptBuilder.build_pipeline_context(task)
+      assert result =~ "Stage 2/3"
+      assert result =~ "[DONE]"
+      assert result =~ "[CURRENT]"
+      assert result =~ "Previous Stage Outputs"
+      assert result =~ "Implemented the feature"
+    end
+  end
+
+  # ── build_role_rules/1 ────────────────────────────────
+
+  describe "build_role_rules/1" do
+    test "returns testing policy for developer role" do
+      profile = %{role: "Senior Developer", company_ref: nil, supervisor: nil, name: "dev1"}
+      result = PromptBuilder.build_role_rules(profile)
+      assert result =~ "Testing Policy"
+      assert result =~ "developer"
+      assert result =~ "do NOT write tests"
+    end
+
+    test "returns testing policy for programmer role" do
+      profile = %{role: "Programmer", company_ref: nil, supervisor: nil, name: "dev1"}
+      result = PromptBuilder.build_role_rules(profile)
+      assert result =~ "Testing Policy"
+    end
+
+    test "returns empty string for PM role" do
+      profile = %{role: "Project Manager", company_ref: nil, supervisor: nil, name: "pm"}
+      result = PromptBuilder.build_role_rules(profile)
+      assert result == ""
+    end
+
+    test "returns empty string for nil role" do
+      profile = %{role: nil, company_ref: nil, supervisor: nil, name: "agent"}
+      result = PromptBuilder.build_role_rules(profile)
+      assert result == ""
+    end
+
+    test "returns empty string for designer role" do
+      profile = %{role: "UI Designer", company_ref: nil, supervisor: nil, name: "designer"}
+      result = PromptBuilder.build_role_rules(profile)
+      assert result == ""
+    end
+  end
+
+  # ── build_designer_context/1 ──────────────────────────
+
+  describe "build_designer_context/1" do
+    test "returns empty string for non-designer role" do
+      profile = %{role: "Developer", company_ref: nil, supervisor: nil, name: "dev"}
+      assert PromptBuilder.build_designer_context(profile) == ""
+    end
+
+    test "returns empty string for nil role" do
+      profile = %{role: nil, company_ref: nil, supervisor: nil, name: "agent"}
+      assert PromptBuilder.build_designer_context(profile) == ""
+    end
+  end
+
+  # ── build_analyst_context/1 ───────────────────────────
+
+  describe "build_analyst_context/1" do
+    test "returns empty string for non-analyst role" do
+      profile = %{role: "Developer", company_ref: nil, supervisor: nil, name: "dev"}
+      assert PromptBuilder.build_analyst_context(profile) == ""
+    end
+
+    test "returns empty string for nil role" do
+      profile = %{role: nil, company_ref: nil, supervisor: nil, name: "agent"}
+      assert PromptBuilder.build_analyst_context(profile) == ""
+    end
+  end
+
+  # ── build_domain_restriction_prompt/2 ─────────────────
+
+  describe "build_domain_restriction_prompt/2" do
+    test "returns empty string when domain is nil" do
+      profile = %{domain: nil, name: "dev"}
+      assert PromptBuilder.build_domain_restriction_prompt(profile, "company") == ""
+    end
+
+    test "returns empty string when domain is empty" do
+      profile = %{domain: "", name: "dev"}
+      assert PromptBuilder.build_domain_restriction_prompt(profile, "company") == ""
+    end
+
+    test "returns empty string when company_name is nil" do
+      profile = %{domain: "backend", name: "dev"}
+      assert PromptBuilder.build_domain_restriction_prompt(profile, nil) == ""
+    end
+  end
+
+  # ── pm_instructions/0 with qa_routing ────────────────
+
+  describe "pm_instructions/0 with qa_routing" do
+    test "includes QA routing when enabled" do
+      original = Application.get_env(:shazam, :qa_routing)
+      Application.put_env(:shazam, :qa_routing, true)
+
+      result = PromptBuilder.pm_instructions()
+      assert result =~ "QA Routing Rules"
+
+      if original do
+        Application.put_env(:shazam, :qa_routing, original)
+      else
+        Application.delete_env(:shazam, :qa_routing)
+      end
+    end
+
+    test "excludes QA routing when disabled" do
+      original = Application.get_env(:shazam, :qa_routing)
+      Application.put_env(:shazam, :qa_routing, false)
+
+      result = PromptBuilder.pm_instructions()
+      refute result =~ "QA Routing Rules"
+
+      if original do
+        Application.put_env(:shazam, :qa_routing, original)
+      else
+        Application.delete_env(:shazam, :qa_routing)
+      end
+    end
   end
 end

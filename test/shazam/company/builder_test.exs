@@ -225,4 +225,98 @@ defmodule Shazam.Company.BuilderTest do
       assert agent.system_prompt == "Be concise."
     end
   end
+
+  # ── merge_with_existing/2 ────────────────────────────────
+
+  describe "merge_with_existing/2" do
+    test "preserves existing values when raw is empty" do
+      existing = %AgentWorker{
+        name: "dev1",
+        role: "Senior Dev",
+        supervisor: "pm",
+        domain: "backend",
+        budget: 100_000,
+        model: "claude-sonnet-4-20250514",
+        fallback_model: "gpt-4o",
+        provider: :claude_code,
+        tools: ["Read", "Edit"],
+        skills: ["plan"],
+        modules: [%{"name" => "auth"}],
+        system_prompt: "Be thorough.",
+        heartbeat_interval: 30_000,
+        company_ref: "Co"
+      }
+
+      result = Builder.merge_with_existing(%{}, existing)
+
+      assert result["name"] == "dev1"
+      assert result["role"] == "Senior Dev"
+      assert result["supervisor"] == "pm"
+      assert result["domain"] == "backend"
+      assert result["budget"] == 100_000
+      assert result["model"] == "claude-sonnet-4-20250514"
+      assert result["fallback_model"] == "gpt-4o"
+      assert result["provider"] == :claude_code
+      assert result["tools"] == ["Read", "Edit"]
+      assert result["skills"] == ["plan"]
+      assert result["modules"] == [%{"name" => "auth"}]
+      assert result["system_prompt"] == "Be thorough."
+      assert result["heartbeat_interval"] == 30_000
+    end
+
+    test "overrides with incoming values from atom keys" do
+      existing = %AgentWorker{
+        name: "dev1",
+        role: "Junior Dev",
+        supervisor: "old_pm",
+        tools: ["Read"],
+        company_ref: "Co"
+      }
+
+      raw = %{role: "Senior Dev", supervisor: "new_pm", tools: ["Read", "Edit", "Write"]}
+      result = Builder.merge_with_existing(raw, existing)
+
+      assert result["name"] == "dev1"
+      assert result["role"] == "Senior Dev"
+      assert result["supervisor"] == "new_pm"
+      assert result["tools"] == ["Read", "Edit", "Write"]
+    end
+
+    test "overrides with incoming values from string keys" do
+      existing = %AgentWorker{
+        name: "dev1",
+        role: "Junior Dev",
+        domain: "frontend",
+        company_ref: "Co"
+      }
+
+      raw = %{"role" => "Lead Dev", "domain" => "backend"}
+      result = Builder.merge_with_existing(raw, existing)
+
+      assert result["role"] == "Lead Dev"
+      assert result["domain"] == "backend"
+    end
+
+    test "allows explicitly setting a field to nil" do
+      existing = %AgentWorker{
+        name: "dev1",
+        role: "Dev",
+        supervisor: "pm",
+        company_ref: "Co"
+      }
+
+      raw = %{supervisor: nil}
+      result = Builder.merge_with_existing(raw, existing)
+
+      assert result["supervisor"] == nil
+    end
+
+    test "name always comes from existing agent" do
+      existing = %AgentWorker{name: "dev1", role: "Dev", company_ref: "Co"}
+      raw = %{name: "hacker", role: "Admin"}
+      result = Builder.merge_with_existing(raw, existing)
+
+      assert result["name"] == "dev1"
+    end
+  end
 end

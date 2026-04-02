@@ -140,9 +140,13 @@ defmodule Shazam.TaskScheduler do
         end
       end
     rescue
-      _ -> nil
+      e ->
+        Logger.warning("[TaskScheduler] Failed to find idle peer for '#{original_agent_name}': #{Exception.message(e)}")
+        nil
     catch
-      :exit, _ -> nil
+      :exit, reason ->
+        Logger.debug("[TaskScheduler] Exit while finding idle peer for '#{original_agent_name}': #{inspect(reason)}")
+        nil
     end
   end
 
@@ -204,7 +208,9 @@ defmodule Shazam.TaskScheduler do
 
       MapSet.union(ancestors, descendants)
     catch
-      _, _ -> MapSet.new([agent_name])
+      kind, reason ->
+        Logger.debug("[TaskScheduler] Failed to build hierarchy for '#{agent_name}': #{inspect(kind)}: #{inspect(reason)}")
+        MapSet.new([agent_name])
     end
   end
 
@@ -253,9 +259,13 @@ defmodule Shazam.TaskScheduler do
     agents = try do
       Shazam.Company.get_agents(company_name)
     rescue
-      _ -> nil
+      e ->
+        Logger.debug("[TaskScheduler] Failed to get agents from Company for '#{agent_name}': #{Exception.message(e)}")
+        nil
     catch
-      :exit, _ -> nil
+      :exit, reason ->
+        Logger.debug("[TaskScheduler] Exit getting agents for '#{agent_name}': #{inspect(reason)}")
+        nil
     end
 
     if agents do
@@ -288,7 +298,9 @@ defmodule Shazam.TaskScheduler do
           _ -> nil
         end
       catch
-        _, _ -> nil
+        kind, reason ->
+          Logger.debug("[TaskScheduler] Store fallback failed for '#{agent_name}': #{inspect(kind)}: #{inspect(reason)}")
+          nil
       end
     end
   end

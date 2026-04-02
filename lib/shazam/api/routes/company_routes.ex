@@ -17,7 +17,7 @@ defmodule Shazam.API.Routes.CompanyRoutes do
         role: a["role"],
         supervisor: a["supervisor"],
         domain: a["domain"],
-        budget: a["budget"] || 100_000,
+        budget: Shazam.Config.normalize_budget(a["budget"]),
         heartbeat_interval: (a["heartbeat_interval"] || 60) * 1000,
         tools: a["tools"] || [],
         skills: a["skills"] || [],
@@ -30,7 +30,7 @@ defmodule Shazam.API.Routes.CompanyRoutes do
 
     case Shazam.start_company(%{name: name, mission: mission, agents: agents}) do
       {:ok, _pid} ->
-        workspace = Application.get_env(:shazam, :workspace, nil)
+        workspace = Application.get_env(:shazam, :workspace)
         if workspace, do: update_workspace_company(workspace, name)
         json(conn, 201, %{status: "ok", company: name})
 
@@ -185,9 +185,9 @@ defmodule Shazam.API.Routes.CompanyRoutes do
         Shazam.Company.update_agents(name, updated_agents)
 
         # Save override to workspace
-        workspace = Application.get_env(:shazam, :workspace)
-        if workspace do
-          save_override(workspace, agent_name, updates)
+        ws = Application.get_env(:shazam, :workspace)
+        if ws do
+          save_override(ws, agent_name, updates)
         end
 
         json(conn, 200, %{ok: true})

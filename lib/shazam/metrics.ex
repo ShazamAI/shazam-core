@@ -41,6 +41,11 @@ defmodule Shazam.Metrics do
     GenServer.cast(__MODULE__, {:record_tokens, agent, tokens, cost_usd})
   end
 
+  @doc "Record context window usage for an agent session."
+  def record_context(agent_name, input_tokens, output_tokens) do
+    GenServer.cast(__MODULE__, {:record_context, agent_name, input_tokens, output_tokens})
+  end
+
   @doc "Sets the display status for an agent (e.g. `\"working\"`, `\"idle\"`)."
   def set_status(agent, status) do
     GenServer.cast(__MODULE__, {:set_status, agent, status})
@@ -67,6 +72,42 @@ defmodule Shazam.Metrics do
   end
 
   @doc """
+  Check if agent has exceeded their token budget.
+
+  Returns `:ok`, `{:warning, used, budget}` (at 90%+), or `{:exceeded, used, budget}`.
+  """
+  def check_budget(agent_name) do
+    agent_data = get_agent(agent_name)
+    tokens_used = if agent_data, do: agent_data[:total_tokens] || 0, else: 0
+
+    budget = get_agent_budget(agent_name)
+
+    cond do
+      budget == nil || budget == 0 -> :ok
+      tokens_used >= budget -> {:exceeded, tokens_used, budget}
+      tokens_used >= budget * 0.9 -> {:warning, tokens_used, budget}
+      true -> :ok
+    end
+  end
+
+  defp get_agent_budget(agent_name) do
+    try do
+      companies = Registry.select(Shazam.CompanyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+      Enum.find_value(companies, fn company ->
+        agents = Shazam.Company.get_agents(to_string(company))
+        case Enum.find(agents, &(&1.name == agent_name)) do
+          nil -> nil
+          agent -> agent.budget
+        end
+      end)
+    catch
+      kind, reason ->
+        Logger.debug("[Metrics] Failed to get budget for #{agent_name}: #{inspect(kind)}: #{inspect(reason)}")
+        nil
+    end
+  end
+
+  @doc """
   Returns dashboard-level aggregate stats combining Metrics and TaskBoard data.
 
   Returns a map with:
@@ -79,6 +120,70 @@ defmodule Shazam.Metrics do
   """
   def get_dashboard_stats do
     GenServer.call(__MODULE__, :get_dashboard_stats)
+  end
+
+  @doc "Compute performance score for an agent (0-100)."
+  def agent_score(agent_name) do
+    agent = get_agent(agent_name) || %{}
+    completions = agent[:successes] || 0
+    failures = agent[:failures] || 0
+    total = completions + failures
+
+    if total == 0 do
+      %{score: 0, grade: "N/A", completions: 0, failures: 0, success_rate: 0, avg_duration_ms: 0, total_tokens: 0, cost_per_task: 0, suggestion: nil}
+    else
+      success_rate = completions / total * 100
+      avg_duration = agent[:avg_duration_ms] || 0
+      total_tokens = agent[:total_tokens] || 0
+      cost_per_task = if total > 0, do: total_tokens / total / 1000 * 0.0065, else: 0
+
+      # Score: weighted average
+      # 50% success rate + 30% speed (inverse of duration) + 20% cost efficiency
+      speed_score = max(0, 100 - avg_duration / 600_000 * 100)
+      cost_score = max(0, 100 - cost_per_task / 0.10 * 100)
+
+      score = round(success_rate * 0.5 + speed_score * 0.3 + cost_score * 0.2)
+      score = min(100, max(0, score))
+
+      grade = cond do
+        score >= 90 -> "A"
+        score >= 75 -> "B"
+        score >= 60 -> "C"
+        score >= 40 -> "D"
+        true -> "F"
+      end
+
+      suggestion = cond do
+        success_rate < 50 -> "High failure rate (#{round(success_rate)}%). Consider upgrading model or reviewing task descriptions."
+        avg_duration > 300_000 -> "Slow average completion (#{round(avg_duration / 1000)}s). Consider using a faster model for simple tasks."
+        cost_per_task > 0.05 -> "High cost per task ($#{:erlang.float_to_binary(cost_per_task, decimals: 3)}). Consider Haiku for simpler tasks."
+        true -> nil
+      end
+
+      %{
+        score: score,
+        grade: grade,
+        completions: completions,
+        failures: failures,
+        success_rate: round(success_rate),
+        avg_duration_ms: round(avg_duration),
+        total_tokens: total_tokens,
+        cost_per_task: cost_per_task,
+        suggestion: suggestion
+      }
+    end
+  end
+
+  @doc "Get performance scores for all agents."
+  def all_agent_scores do
+    case get_all() do
+      %{agents: agents} ->
+        Enum.map(agents, fn {name, _data} ->
+          {name, agent_score(name)}
+        end)
+        |> Map.new()
+      _ -> %{}
+    end
   end
 
   # --- Callbacks ---
@@ -151,6 +256,24 @@ defmodule Shazam.Metrics do
     update_agent(agent, fn metrics ->
       %{metrics | status: status}
     end)
+    {:noreply, state}
+  end
+
+  def handle_cast({:record_context, agent_name, input, output}, state) do
+    update_agent(agent_name, fn metrics ->
+      context = Map.get(metrics, :context, %{last_input: 0, last_output: 0, peak_input: 0})
+
+      updated_context = %{
+        last_input: input,
+        last_output: output,
+        peak_input: max(Map.get(context, :peak_input, 0), input),
+        updated_at: DateTime.utc_now()
+      }
+
+      Map.put(metrics, :context, updated_context)
+    end)
+
+    broadcast_metrics_update()
     {:noreply, state}
   end
 
@@ -242,9 +365,13 @@ defmodule Shazam.Metrics do
         DateTime.compare(task.updated_at, one_hour_ago) != :lt
       end)
     rescue
-      _ -> 0
+      e ->
+        Logger.debug("[Metrics] Failed to count tasks last hour: #{Exception.message(e)}")
+        0
     catch
-      :exit, _ -> 0
+      :exit, reason ->
+        Logger.debug("[Metrics] Exit counting tasks last hour: #{inspect(reason)}")
+        0
     end
 
     # Retry rate — tasks with retry_count > 0 / total tasks
@@ -258,9 +385,13 @@ defmodule Shazam.Metrics do
         0.0
       end
     rescue
-      _ -> 0.0
+      e ->
+        Logger.debug("[Metrics] Failed to compute retry rate: #{Exception.message(e)}")
+        0.0
     catch
-      :exit, _ -> 0.0
+      :exit, reason ->
+        Logger.debug("[Metrics] Exit computing retry rate: #{inspect(reason)}")
+        0.0
     end
 
     stats = %{
@@ -314,6 +445,8 @@ defmodule Shazam.Metrics do
   end
 
   defp serialize_metrics(metrics) do
+    context = Map.get(metrics, :context, %{last_input: 0, last_output: 0, peak_input: 0})
+
     %{
       successes: metrics.successes,
       failures: metrics.failures,
@@ -322,8 +455,21 @@ defmodule Shazam.Metrics do
       avg_duration_ms: metrics.avg_duration_ms,
       total_tokens: metrics.total_tokens,
       estimated_cost: metrics.estimated_cost,
-      tasks_per_hour: metrics.tasks_per_hour
+      tasks_per_hour: metrics.tasks_per_hour,
+      context: %{
+        last_input: Map.get(context, :last_input, 0),
+        last_output: Map.get(context, :last_output, 0),
+        peak_input: Map.get(context, :peak_input, 0),
+        capacity: 200_000,
+        usage_percent: context_usage_percent(Map.get(context, :last_input, 0)),
+        warning: context_usage_percent(Map.get(context, :last_input, 0)) > 80
+      }
     }
+  end
+
+  defp context_usage_percent(0), do: 0
+  defp context_usage_percent(input_tokens) do
+    round(input_tokens / 200_000 * 100)
   end
 
   defp compute_rate(_successes, 0), do: 0.0
@@ -375,7 +521,9 @@ defmodule Shazam.Metrics do
         File.mkdir_p!(Path.dirname(path))
         File.write!(path, Jason.encode!(data, pretty: true))
       catch
-        _, _ -> :ok
+        kind, reason ->
+          Logger.debug("[Metrics] Failed to save metrics to disk: #{inspect(kind)}: #{inspect(reason)}")
+          :ok
       end
     end)
   end
@@ -403,7 +551,9 @@ defmodule Shazam.Metrics do
         _ -> :ok
       end
     catch
-      _, _ -> :ok
+      kind, reason ->
+        Logger.warning("[Metrics] Failed to load metrics from disk: #{inspect(kind)}: #{inspect(reason)}")
+        :ok
     end
   end
 end

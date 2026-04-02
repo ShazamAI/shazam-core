@@ -37,6 +37,9 @@ defmodule Shazam.Application do
       # Metrics tracking (in-memory, ETS-backed)
       Shazam.Metrics,
 
+      # Config Sync — periodic IDE config generation
+      Shazam.ConfigSync,
+
       # Agent Inbox — user message queue for terminal input
       Shazam.AgentInbox,
 
@@ -46,8 +49,17 @@ defmodule Shazam.Application do
       # Context persistence — cross-provider context continuity
       Shazam.ContextManager,
 
+      # Memory Consolidator — periodic token reduction for agent memories
+      Shazam.MemoryConsolidator,
+
       # Circuit Breaker — auto-pauses on consecutive failures
       Shazam.CircuitBreaker,
+
+      # Webhook notifications — sends HTTP webhooks for important events
+      Shazam.Webhook,
+
+      # Audit Log — records important actions for compliance and debugging
+      Shazam.AuditLog,
 
       # Plugin Manager — loads .shazam/plugins/*.ex at runtime
       Shazam.PluginManager,

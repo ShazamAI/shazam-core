@@ -4,6 +4,9 @@ defmodule Shazam.CircuitBreakerTest do
   @moduletag :circuit_breaker
 
   setup do
+    # Ensure CircuitBreaker GenServer is running (may have been killed by other tests)
+    unless GenServer.whereis(Shazam.CircuitBreaker), do: Shazam.CircuitBreaker.start_link([])
+
     # Reset circuit breaker before each test
     Shazam.CircuitBreaker.reset()
     :ok

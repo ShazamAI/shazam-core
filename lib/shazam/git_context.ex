@@ -8,6 +8,8 @@ defmodule Shazam.GitContext do
   git repo or git is not installed.
   """
 
+  require Logger
+
   @max_context_chars 500
 
   # ── Public API ────────────────────────────────────────
@@ -78,7 +80,9 @@ defmodule Shazam.GitContext do
       ""
     end
   rescue
-    _ -> ""
+    e ->
+      Logger.debug("[GitContext] Failed to build git context: #{Exception.message(e)}")
+      ""
   end
 
   @doc "Returns the current git branch name, or empty string if not a git repo."
@@ -193,9 +197,13 @@ defmodule Shazam.GitContext do
         {error, _code} -> {:error, error}
       end
     rescue
-      _ -> {:error, :cmd_failed}
+      e ->
+        Logger.debug("[GitContext] Git command failed (#{inspect(args)}): #{Exception.message(e)}")
+        {:error, :cmd_failed}
     catch
-      _, _ -> {:error, :cmd_failed}
+      kind, reason ->
+        Logger.debug("[GitContext] Git command failed (#{inspect(args)}): #{inspect(kind)}: #{inspect(reason)}")
+        {:error, :cmd_failed}
     end
   end
 

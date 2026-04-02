@@ -6,6 +6,7 @@ defmodule Shazam.ProjectRegistry do
   """
 
   use GenServer
+  require Logger
 
   @registry_file "projects.json"
 
@@ -115,6 +116,7 @@ defmodule Shazam.ProjectRegistry do
 
       project ->
         result = do_start_project(project)
+        if match?({:ok, _}, result), do: Shazam.AuditLog.record("project_started", %{name: name})
 
         # Update last_used
         projects = Enum.map(state.projects, fn p ->
@@ -139,8 +141,11 @@ defmodule Shazam.ProjectRegistry do
         _ -> :ok
       end
     catch
-      _, _ -> :ok
+      kind, reason ->
+        Logger.warning("[ProjectRegistry] Failed to stop project '#{name}': #{inspect(kind)}: #{inspect(reason)}")
+        :ok
     end
+    Shazam.AuditLog.record("project_stopped", %{name: name})
     {:reply, result, state}
   end
 
@@ -182,6 +187,13 @@ defmodule Shazam.ProjectRegistry do
             agents: agents,
             domain_config: yaml["domains"] || %{}
           }
+
+          # Re-import tasks from workspace (TaskBoard starts before projects)
+          try do
+            Shazam.TaskBoard.reimport_from_workspace(path)
+          catch
+            _, _ -> :ok
+          end
 
           # Start company
           case Shazam.start_company(company_config) do
@@ -225,6 +237,7 @@ defmodule Shazam.ProjectRegistry do
                   |> maybe_override(:supervisor, overrides["supervisor"])
                   |> maybe_override(:role, overrides["role"])
                   |> maybe_override(:domain, overrides["domain"])
+                  |> maybe_override(:subagents, overrides["subagents"])
               end
             end)
           _ -> agents
@@ -232,7 +245,9 @@ defmodule Shazam.ProjectRegistry do
       _ -> agents
     end
   rescue
-    _ -> agents
+    e ->
+      Logger.warning("[ProjectRegistry] Failed to apply overrides: #{Exception.message(e)}")
+      agents
   end
 
   defp maybe_override(agent, _field, nil), do: agent
@@ -248,7 +263,15 @@ defmodule Shazam.ProjectRegistry do
         workspace: config["workspace"],
         provider: config["provider"],
         budget: config["budget"],
-        domain: config["domain"]
+        domain: config["domain"],
+        model: config["model"],
+        fallback_model: config["fallback_model"],
+        tools: config["tools"] || [],
+        skills: config["skills"] || [],
+        modules: config["modules"] || [],
+        subagents: config["subagents"] || [],
+        system_prompt: config["system_prompt"],
+        heartbeat_interval: config["heartbeat_interval"],
       }
     end)
   end
@@ -267,7 +290,9 @@ defmodule Shazam.ProjectRegistry do
         _ -> false
       end
     catch
-      _, _ -> false
+      kind, reason ->
+        Logger.debug("[ProjectRegistry] Failed to check status of '#{project.name}': #{inspect(kind)}: #{inspect(reason)}")
+        false
     end
 
     Map.put(project, :status, if(running, do: "running", else: "stopped"))

@@ -294,6 +294,124 @@ defmodule Shazam.PlanManagerTest do
     end
   end
 
+  # ── save_plan + read_plan round-trip ──────────────────────
+
+  describe "save_plan/1 and read_plan/1" do
+    setup do
+      tmp = Path.join(System.tmp_dir!(), "shazam_plan_test_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(tmp)
+      original_workspace = Application.get_env(:shazam, :workspace)
+      Application.put_env(:shazam, :workspace, tmp)
+
+      on_exit(fn ->
+        if original_workspace do
+          Application.put_env(:shazam, :workspace, original_workspace)
+        else
+          Application.delete_env(:shazam, :workspace)
+        end
+        File.rm_rf!(tmp)
+      end)
+
+      %{workspace: tmp}
+    end
+
+    test "saves and reads back a plan" do
+      plan = %{
+        id: "plan_42",
+        title: "Test Plan",
+        status: "draft",
+        summary: "A test plan summary",
+        created_at: "2026-01-01T00:00:00Z",
+        tasks: [
+          %{title: "Task A", assigned_to: "dev1", phase: "Phase 1", depends_on: nil},
+          %{title: "Task B", assigned_to: "dev2", phase: "Phase 1", depends_on: "Task A"}
+        ]
+      }
+
+      {:ok, path} = PlanManager.save_plan(plan)
+      assert File.exists?(path)
+
+      {:ok, loaded} = PlanManager.read_plan("plan_42")
+      assert loaded.id == "plan_42"
+      assert loaded.title == "Test Plan"
+      assert loaded.status == "draft"
+      assert length(loaded.tasks) == 2
+    end
+
+    test "read_plan returns error for nonexistent plan" do
+      assert {:error, :not_found} = PlanManager.read_plan("nonexistent_plan")
+    end
+  end
+
+  describe "list_plans/0" do
+    setup do
+      tmp = Path.join(System.tmp_dir!(), "shazam_plan_list_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(tmp)
+      original_workspace = Application.get_env(:shazam, :workspace)
+      Application.put_env(:shazam, :workspace, tmp)
+
+      on_exit(fn ->
+        if original_workspace do
+          Application.put_env(:shazam, :workspace, original_workspace)
+        else
+          Application.delete_env(:shazam, :workspace)
+        end
+        File.rm_rf!(tmp)
+      end)
+
+      %{workspace: tmp}
+    end
+
+    test "returns empty list when no plans exist" do
+      assert PlanManager.list_plans() == []
+    end
+
+    test "lists saved plans" do
+      plan1 = %{id: "plan_1", title: "First", status: "draft", tasks: [], created_at: "2026-01-01T00:00:00Z"}
+      plan2 = %{id: "plan_2", title: "Second", status: "active", tasks: [], created_at: "2026-01-02T00:00:00Z"}
+
+      PlanManager.save_plan(plan1)
+      PlanManager.save_plan(plan2)
+
+      plans = PlanManager.list_plans()
+      assert length(plans) == 2
+      ids = Enum.map(plans, & &1.id)
+      assert "plan_1" in ids
+      assert "plan_2" in ids
+    end
+  end
+
+  describe "next_id/0" do
+    setup do
+      tmp = Path.join(System.tmp_dir!(), "shazam_plan_id_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(tmp)
+      original_workspace = Application.get_env(:shazam, :workspace)
+      Application.put_env(:shazam, :workspace, tmp)
+
+      on_exit(fn ->
+        if original_workspace do
+          Application.put_env(:shazam, :workspace, original_workspace)
+        else
+          Application.delete_env(:shazam, :workspace)
+        end
+        File.rm_rf!(tmp)
+      end)
+
+      %{workspace: tmp}
+    end
+
+    test "returns plan_1 when no plans exist" do
+      assert PlanManager.next_id() == "plan_1"
+    end
+
+    test "increments after existing plans" do
+      plan = %{id: "plan_3", title: "Existing", status: "draft", tasks: [], created_at: "2026-01-01T00:00:00Z"}
+      PlanManager.save_plan(plan)
+
+      assert PlanManager.next_id() == "plan_4"
+    end
+  end
+
   # ── build_plan_prompt/1 ────────────────────────────────────
 
   describe "build_plan_prompt/1" do

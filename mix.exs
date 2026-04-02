@@ -1,7 +1,7 @@
 defmodule ShazamCore.MixProject do
   use Mix.Project
 
-  @version "0.5.3"
+  @version "1.0.0"
 
   def project do
     [

@@ -6,6 +6,7 @@ defmodule Shazam.API.WebSocket do
   """
 
   @behaviour WebSock
+  require Logger
 
   alias Shazam.API.WebSocketCommands
 
@@ -54,7 +55,9 @@ defmodule Shazam.API.WebSocket do
           agents_count: length(agents)
         })
       catch
-        _, _ -> :ok
+        kind, reason ->
+          Logger.debug("[WebSocket] Failed to register project: #{inspect(kind)}: #{inspect(reason)}")
+          :ok
       end
     end
 
@@ -155,7 +158,7 @@ defmodule Shazam.API.WebSocket do
       []
     else
       main_msg = cond do
-        # Agent output — show tool_use and text, skip text_delta
+        # Agent output — forward full content with mapped event types for dashboard
         event_type == "agent_output" ->
           agent = event[:agent] || event["agent"] || ""
           output_type = event[:type] || event["type"] || ""
@@ -163,16 +166,22 @@ defmodule Shazam.API.WebSocket do
 
           case output_type do
             "tool_use" ->
+              {tool_name, tool_input} = parse_tool_content(content)
               %{type: "event", agent: agent, event: "tool_use",
+                data: %{tool_name: tool_name, input: tool_input, text: to_string(content)},
                 title: String.slice(to_string(content), 0..120), timestamp: ts}
             "text" ->
-              first_line = content |> to_string() |> String.split("\n") |> List.first("")
-              if String.length(first_line) > 5 do
-                %{type: "event", agent: agent, event: "agent_output",
-                  title: String.slice(first_line, 0..120), timestamp: ts}
-              else
-                nil
-              end
+              %{type: "event", agent: agent, event: "agent_output",
+                data: %{text: to_string(content)},
+                title: String.slice(to_string(content), 0..120), timestamp: ts}
+            "text_delta" ->
+              %{type: "event", agent: agent, event: "agent_text_delta",
+                data: %{text: to_string(content)},
+                title: String.slice(to_string(content), 0..120), timestamp: ts}
+            "result" ->
+              %{type: "event", agent: agent, event: "agent_text_complete",
+                data: %{text: to_string(content)},
+                title: String.slice(to_string(content), 0..120), timestamp: ts}
             _ -> nil
           end
 
@@ -245,7 +254,9 @@ defmodule Shazam.API.WebSocket do
           _ -> nil
         end
       catch
-        _, _ -> nil
+        kind, reason ->
+          Logger.debug("[WebSocket] Failed to get task info for event enrichment: #{inspect(kind)}: #{inspect(reason)}")
+          nil
       end
 
       agent = if raw_agent == "" and task_info, do: task_info.assigned_to || "system", else: raw_agent
@@ -306,4 +317,20 @@ defmodule Shazam.API.WebSocket do
   rescue
     _ -> map
   end
+
+  # Extract tool name and input from content (map or string)
+  defp parse_tool_content(content) when is_map(content) do
+    name = content[:name] || content["name"] || content[:tool_name] || content["tool_name"] || "unknown"
+    input = content[:input] || content["input"] || content[:arguments] || content["arguments"] || ""
+    input_str = if is_map(input) || is_list(input), do: Jason.encode!(input), else: to_string(input)
+    {to_string(name), input_str}
+  end
+  defp parse_tool_content(content) when is_binary(content) do
+    case String.split(content, ":", parts: 2) do
+      [name, input] -> {String.trim(name), String.trim(input)}
+      [name] -> {String.trim(name), ""}
+      _ -> {"unknown", content}
+    end
+  end
+  defp parse_tool_content(content), do: {"unknown", inspect(content)}
 end

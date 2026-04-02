@@ -4,6 +4,7 @@ defmodule Shazam.API.EventBus do
   """
 
   use GenServer
+  require Logger
 
   @doc false
   def start_link(_opts) do
@@ -29,7 +30,9 @@ defmodule Shazam.API.EventBus do
   def recent_events do
     GenServer.call(__MODULE__, :recent_events)
   catch
-    _, _ -> []
+    kind, reason ->
+      Logger.debug("[EventBus] Failed to get recent events: #{inspect(kind)}: #{inspect(reason)}")
+      []
   end
 
   @impl true
@@ -62,6 +65,9 @@ defmodule Shazam.API.EventBus do
 
     # Add timestamp if missing
     event = Map.put_new(event, :timestamp, DateTime.to_iso8601(DateTime.utc_now()))
+
+    # Send to webhooks
+    Shazam.Webhook.notify(event)
 
     # Buffer last 50 events
     {buffer, size} = if state.buffer_size >= 50 do

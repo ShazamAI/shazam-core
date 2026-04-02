@@ -6,6 +6,7 @@ defmodule Shazam.API.WebSocketCommands do
   Helpers (event_msg, list_tasks, etc.) are in WebSocketCommands.Helpers.
   """
 
+  require Logger
   import Shazam.API.WebSocketCommands.Helpers
 
   @doc "Dispatches a TUI command string and returns a list of response messages."
@@ -97,7 +98,9 @@ defmodule Shazam.API.WebSocketCommands do
           Shazam.TaskFiles.sync_from_files()
           [event_msg("system", "info", "Tasks synced from files")]
         catch
-          _, _ -> [event_msg("system", "error", "Sync failed")]
+          kind, reason ->
+            Logger.warning("[WebSocket] Task sync failed: #{inspect(kind)}: #{inspect(reason)}")
+            [event_msg("system", "error", "Sync failed")]
         end
 
       raw == "/restart" ->
@@ -116,13 +119,17 @@ defmodule Shazam.API.WebSocketCommands do
         current = try do
           Shazam.RalphLoop.status(company)[:auto_approve] || false
         catch
-          _, _ -> false
+          kind, reason ->
+            Logger.debug("[WebSocket] Failed to get auto-approve status: #{inspect(kind)}: #{inspect(reason)}")
+            false
         end
         new_val = !current
         try do
           Shazam.RalphLoop.set_auto_approve(company, new_val)
         catch
-          _, _ -> :ok
+          kind, reason ->
+            Logger.warning("[WebSocket] Failed to set auto-approve: #{inspect(kind)}: #{inspect(reason)}")
+            :ok
         end
         [event_msg("system", "info", "Auto-approve: #{new_val} (session only)")]
 
@@ -226,7 +233,9 @@ defmodule Shazam.API.WebSocketCommands do
         _ -> false
       end
     catch
-      _, _ -> false
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to check company registry: #{inspect(kind)}: #{inspect(reason)}")
+        false
     end
 
     if already_running do
@@ -255,7 +264,9 @@ defmodule Shazam.API.WebSocketCommands do
         _ -> false
       end
     catch
-      _, _ -> false
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to check company registry: #{inspect(kind)}: #{inspect(reason)}")
+        false
     end
 
     if already_exists do
@@ -288,7 +299,9 @@ defmodule Shazam.API.WebSocketCommands do
           try do
             Shazam.Company.update_agents(company, agents)
           catch
-            _, _ -> :ok
+            kind, reason ->
+              Logger.warning("[WebSocket] Failed to update agents for '#{company}': #{inspect(kind)}: #{inspect(reason)}")
+              :ok
           end
         end
         event_msg("system", "info", "Company '#{company}' ready (#{length(agents)} agents)")
@@ -308,7 +321,9 @@ defmodule Shazam.API.WebSocketCommands do
         if rc[:qa_auto], do: Application.put_env(:shazam, :qa_auto, true)
         if rc[:qa_routing], do: Application.put_env(:shazam, :qa_routing, true)
       catch
-        _, _ -> :ok
+        kind, reason ->
+          Logger.warning("[WebSocket] Failed to apply RalphLoop config: #{inspect(kind)}: #{inspect(reason)}")
+          :ok
       end
 
       Shazam.RalphLoop.resume(company)
@@ -371,7 +386,9 @@ defmodule Shazam.API.WebSocketCommands do
           Shazam.AgentInbox.push(agent_name, message)
           [event_msg("system", "info", "Message sent to #{agent_name}")]
         catch
-          _, _ -> [event_msg("system", "error", "Failed to send message")]
+          kind, reason ->
+            Logger.warning("[WebSocket] Failed to send message to #{agent_name}: #{inspect(kind)}: #{inspect(reason)}")
+            [event_msg("system", "error", "Failed to send message")]
         end
       _ ->
         [event_msg("system", "error", "Usage: /msg <agent> <message>")]
@@ -405,7 +422,9 @@ defmodule Shazam.API.WebSocketCommands do
       metrics = try do
         Shazam.Metrics.get_agent(name) || %{}
       catch
-        _, _ -> %{}
+        kind, reason ->
+          Logger.debug("[WebSocket] Failed to get metrics for #{name}: #{inspect(kind)}: #{inspect(reason)}")
+          %{}
       end
       tokens = Map.get(metrics, :tokens_used, 0)
       cost = Map.get(metrics, :estimated_cost, 0.0)
@@ -418,7 +437,9 @@ defmodule Shazam.API.WebSocketCommands do
         _ -> 0.0
       end
     catch
-      _, _ -> 0.0
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to get total cost: #{inspect(kind)}: #{inspect(reason)}")
+        0.0
     end
 
     lines ++ agent_lines ++ [event_msg("system", "info", "  Total: $#{Float.round(total_cost * 1.0, 4)}")]
@@ -447,7 +468,9 @@ defmodule Shazam.API.WebSocketCommands do
       })
       [event_msg("system", "info", "GitHub sync triggered")]
     catch
-      _, _ -> [event_msg("system", "error", "GitHub sync failed")]
+      kind, reason ->
+        Logger.warning("[WebSocket] GitHub sync failed: #{inspect(kind)}: #{inspect(reason)}")
+        [event_msg("system", "error", "GitHub sync failed")]
     end
   end
 
@@ -491,7 +514,9 @@ defmodule Shazam.API.WebSocketCommands do
             _ -> [event_msg("system", "error", "Task #{task_id} not found")]
           end
         catch
-          _, _ -> [event_msg("system", "error", "QA generation failed")]
+          kind, reason ->
+            Logger.warning("[WebSocket] QA generation failed for #{task_id}: #{inspect(kind)}: #{inspect(reason)}")
+            [event_msg("system", "error", "QA generation failed")]
         end
 
       true ->
@@ -526,7 +551,9 @@ defmodule Shazam.API.WebSocketCommands do
     plugins = try do
       Shazam.PluginManager.list_plugins()
     catch
-      _, _ -> []
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to list plugins: #{inspect(kind)}: #{inspect(reason)}")
+        []
     end
 
     if plugins == [] do
@@ -631,7 +658,9 @@ defmodule Shazam.API.WebSocketCommands do
         _ -> conn_state[:agents] || []
       end
     catch
-      _, _ -> conn_state[:agents] || []
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to get agents from registry: #{inspect(kind)}: #{inspect(reason)}")
+        conn_state[:agents] || []
     end
 
     {pending, running, done, awaiting} = get_task_counts(company)
@@ -647,7 +676,9 @@ defmodule Shazam.API.WebSocketCommands do
         0
       end
     catch
-      _, _ -> 0
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to get active agent count: #{inspect(kind)}: #{inspect(reason)}")
+        0
     end
 
     total_cost = try do
@@ -656,7 +687,9 @@ defmodule Shazam.API.WebSocketCommands do
         _ -> 0.0
       end
     catch
-      _, _ -> 0.0
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to get total cost: #{inspect(kind)}: #{inspect(reason)}")
+        0.0
     end
 
     budget_total = agents |> Enum.map(& &1[:budget] || 100_000) |> Enum.sum()
@@ -669,19 +702,25 @@ defmodule Shazam.API.WebSocketCommands do
         end
       end)
     catch
-      _, _ -> 0
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to get budget usage: #{inspect(kind)}: #{inspect(reason)}")
+        0
     end
 
     sparklines = try do
       Shazam.AgentPulse.all_sparklines()
     catch
-      _, _ -> %{}
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to get sparklines: #{inspect(kind)}: #{inspect(reason)}")
+        %{}
     end
 
     git_branch = try do
       Shazam.GitContext.current_branch(workspace)
     catch
-      _, _ -> ""
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to get git branch: #{inspect(kind)}: #{inspect(reason)}")
+        ""
     end
 
     git_status = try do
@@ -690,7 +729,9 @@ defmodule Shazam.API.WebSocketCommands do
         files when is_list(files) -> "#{length(files)} modified"
       end
     catch
-      _, _ -> ""
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to get git status: #{inspect(kind)}: #{inspect(reason)}")
+        ""
     end
 
     provider = to_string(Application.get_env(:shazam, :default_provider, "claude_code"))
@@ -726,7 +767,9 @@ defmodule Shazam.API.WebSocketCommands do
       metrics = try do
         Shazam.Metrics.get_agent(name) || %{}
       catch
-        _, _ -> %{}
+        kind, reason ->
+          Logger.debug("[WebSocket] Failed to get dashboard metrics for #{name}: #{inspect(kind)}: #{inspect(reason)}")
+          %{}
       end
 
       current_task = try do
@@ -736,7 +779,9 @@ defmodule Shazam.API.WebSocketCommands do
           t -> t.title
         end
       catch
-        _, _ -> nil
+        kind, reason ->
+          Logger.debug("[WebSocket] Failed to get current task for #{name}: #{inspect(kind)}: #{inspect(reason)}")
+          nil
       end
 
       %{
@@ -814,7 +859,9 @@ defmodule Shazam.API.WebSocketCommands do
     circuit_state = try do
       if Shazam.CircuitBreaker.tripped?(), do: "TRIPPED", else: "ok"
     catch
-      _, _ -> "unknown"
+      kind, reason ->
+        Logger.debug("[WebSocket] Failed to check circuit breaker: #{inspect(kind)}: #{inspect(reason)}")
+        "unknown"
     end
 
     event_msg("system", "info",

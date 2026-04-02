@@ -2,6 +2,7 @@ defmodule Shazam.API.Routes.MiscRoutes do
   @moduledoc "Handles sessions, metrics, agent inbox, health, presets, and templates. Forwarded with prefix /api stripped."
 
   use Plug.Router
+  require Logger
 
   import Shazam.API.Helpers
 
@@ -49,6 +50,25 @@ defmodule Shazam.API.Routes.MiscRoutes do
 
   get "/agent-presets" do
     presets = Shazam.AgentPresets.list()
+    json(conn, 200, %{presets: presets})
+  end
+
+  # --- Subagent Presets ---
+
+  get "/subagent-presets" do
+    presets = Shazam.SubagentPresets.all()
+      |> Enum.map(fn {name, p} ->
+        %{
+          name: name,
+          description: p.description,
+          default_model: p.default_model,
+          readonly: p.readonly,
+          level: p.level,
+          tools: p.tools
+        }
+      end)
+      |> Enum.sort_by(& &1.name)
+
     json(conn, 200, %{presets: presets})
   end
 
@@ -166,7 +186,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
       |> List.first()
       |> to_string()
     catch
-      _, _ -> nil
+      kind, reason ->
+        Logger.debug("[MiscRoutes] Failed to get company name: #{inspect(kind)}: #{inspect(reason)}")
+        nil
     end
 
     ralph_config = if company_name do
@@ -182,7 +204,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
           max_retries: status[:max_retries] || 2
         }
       catch
-        _, _ -> %{}
+        kind, reason ->
+          Logger.debug("[MiscRoutes] Failed to get RalphLoop config: #{inspect(kind)}: #{inspect(reason)}")
+          %{}
       end
     else
       %{}
@@ -212,7 +236,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
           })
         end)
       catch
-        _, _ -> %{}
+        kind, reason ->
+          Logger.debug("[MiscRoutes] Failed to get agents: #{inspect(kind)}: #{inspect(reason)}")
+          %{}
       end
     else
       %{}
@@ -223,7 +249,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
       try do
         Shazam.Company.get_domain_config(company_name) || %{}
       catch
-        _, _ -> %{}
+        kind, reason ->
+          Logger.debug("[MiscRoutes] Failed to get domain config: #{inspect(kind)}: #{inspect(reason)}")
+          %{}
       end
     else
       %{}
@@ -244,7 +272,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
         }
       end)
     catch
-      _, _ -> []
+      kind, reason ->
+        Logger.debug("[MiscRoutes] Failed to list plugins: #{inspect(kind)}: #{inspect(reason)}")
+        []
     end
 
     # Get mission from company info
@@ -253,7 +283,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
         info = Shazam.Company.info(company_name)
         {info[:mission], info[:workspace]}
       catch
-        _, _ -> {nil, nil}
+        kind, reason ->
+          Logger.debug("[MiscRoutes] Failed to get company info: #{inspect(kind)}: #{inspect(reason)}")
+          {nil, nil}
       end
     else
       {nil, nil}
@@ -283,7 +315,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
       |> List.first()
       |> to_string()
     catch
-      _, _ -> nil
+      kind, reason ->
+        Logger.debug("[MiscRoutes] Failed to get company for config update: #{inspect(kind)}: #{inspect(reason)}")
+        nil
     end
 
     if company && Shazam.RalphLoop.exists?(company) do
@@ -300,6 +334,42 @@ defmodule Shazam.API.Routes.MiscRoutes do
     end
   end
 
+  # --- Webhooks ---
+
+  get "/webhooks" do
+    webhooks = Shazam.Webhook.list()
+
+    json(conn, 200, %{
+      webhooks:
+        Enum.map(webhooks, fn w ->
+          %{url: w.url, events: w.events, active: w.active}
+        end)
+    })
+  end
+
+  post "/webhooks" do
+    url = conn.body_params["url"]
+    events = conn.body_params["events"]
+    secret = conn.body_params["secret"]
+
+    if !url || url == "" do
+      json(conn, 400, %{error: "url is required"})
+    else
+      opts = []
+      opts = if events, do: [{:events, events} | opts], else: opts
+      opts = if secret, do: [{:secret, secret} | opts], else: opts
+
+      Shazam.Webhook.register(url, opts)
+      json(conn, 201, %{status: "ok"})
+    end
+  end
+
+  delete "/webhooks" do
+    url = conn.body_params["url"]
+    Shazam.Webhook.unregister(url)
+    json(conn, 200, %{status: "ok"})
+  end
+
   # --- Events ---
 
   get "/events/recent" do
@@ -307,7 +377,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
     events = try do
       Shazam.API.EventBus.recent_events()
     catch
-      _, _ -> []
+      kind, reason ->
+        Logger.debug("[MiscRoutes] Failed to get recent events: #{inspect(kind)}: #{inspect(reason)}")
+        []
     end
     json(conn, 200, %{events: events})
   end
@@ -350,6 +422,21 @@ defmodule Shazam.API.Routes.MiscRoutes do
     end
   end
 
+  # --- Audit Log ---
+
+  get "/audit-log" do
+    limit = (conn.params["limit"] || "50") |> String.to_integer() |> min(200)
+    action = conn.params["action"]
+
+    entries = if action do
+      Shazam.AuditLog.filter(action, limit)
+    else
+      Shazam.AuditLog.recent(limit)
+    end
+
+    json(conn, 200, %{entries: entries})
+  end
+
   # --- Hot Reload ---
 
   post "/daemon/reload" do
@@ -358,6 +445,14 @@ defmodule Shazam.API.Routes.MiscRoutes do
       :ok -> json(conn, 200, result)
       {:error, reason} -> json(conn, 500, %{error: inspect(reason)})
     end
+  end
+
+  # --- Doctor (diagnostics) ---
+
+  get "/doctor" do
+    result = Shazam.Doctor.diagnose()
+    status_code = if result.failed > 0, do: 503, else: 200
+    json(conn, status_code, result)
   end
 
   # --- Health ---
@@ -370,9 +465,13 @@ defmodule Shazam.API.Routes.MiscRoutes do
       Registry.select(Shazam.CompanyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
       |> Enum.map(&to_string/1)
     rescue
-      _ -> []
+      e ->
+        Logger.debug("[MiscRoutes] Failed to list companies: #{Exception.message(e)}")
+        []
     catch
-      _, _ -> []
+      kind, reason ->
+        Logger.debug("[MiscRoutes] Failed to list companies: #{inspect(kind)}: #{inspect(reason)}")
+        []
     end
 
     pid = to_string(:os.getpid())
@@ -381,7 +480,9 @@ defmodule Shazam.API.Routes.MiscRoutes do
     circuit_breaker_tripped = try do
       Shazam.CircuitBreaker.tripped?()
     catch
-      _, _ -> false
+      kind, reason ->
+        Logger.debug("[MiscRoutes] Failed to check circuit breaker: #{inspect(kind)}: #{inspect(reason)}")
+        false
     end
 
     json(conn, 200, %{
@@ -393,6 +494,24 @@ defmodule Shazam.API.Routes.MiscRoutes do
       pid: pid,
       port: port,
       circuit_breaker_tripped: circuit_breaker_tripped
+    })
+  end
+
+  # --- Memory Consolidation ---
+
+  post "/memory/consolidate" do
+    case Shazam.MemoryConsolidator.consolidate_all() do
+      {:ok, results} -> json(conn, 200, %{status: "ok", results: results})
+      {:error, reason} -> json(conn, 500, %{error: inspect(reason)})
+    end
+  end
+
+  get "/memory/consolidation-status" do
+    status = Shazam.MemoryConsolidator.status()
+
+    json(conn, 200, %{
+      last_run: if(status.last_run, do: DateTime.to_iso8601(status.last_run), else: nil),
+      results: status.results
     })
   end
 
@@ -423,6 +542,53 @@ defmodule Shazam.API.Routes.MiscRoutes do
       {:ok, dir} -> json(conn, 200, %{status: "ok", directory: dir})
       {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
     end
+  end
+
+  # --- Agent Budget ---
+
+  get "/agents/:agent_name/budget" do
+    case Shazam.Metrics.check_budget(agent_name) do
+      :ok ->
+        json(conn, 200, %{status: "ok", within_budget: true})
+
+      {:warning, used, budget} ->
+        json(conn, 200, %{
+          status: "warning",
+          within_budget: true,
+          tokens_used: used,
+          budget: budget,
+          percentage: round(used / budget * 100)
+        })
+
+      {:exceeded, used, budget} ->
+        json(conn, 200, %{
+          status: "exceeded",
+          within_budget: false,
+          tokens_used: used,
+          budget: budget,
+          percentage: round(used / budget * 100)
+        })
+    end
+  end
+
+  # --- Agent Context Window ---
+
+  get "/agents/:agent_name/context" do
+    agent_data = Shazam.Metrics.get_agent(agent_name) || %{}
+    context = agent_data[:context] || %{last_input: 0, last_output: 0, peak_input: 0}
+
+    capacity = 200_000
+    usage_pct = if context.last_input > 0, do: round(context.last_input / capacity * 100), else: 0
+
+    json(conn, 200, %{
+      agent: agent_name,
+      last_input_tokens: context.last_input,
+      last_output_tokens: context.last_output,
+      peak_input_tokens: context.peak_input,
+      capacity: capacity,
+      usage_percent: usage_pct,
+      warning: usage_pct > 80
+    })
   end
 
   # --- Agent Inbox ---
@@ -468,6 +634,27 @@ defmodule Shazam.API.Routes.MiscRoutes do
     end
   end
 
+  # --- Agent-to-Agent Messaging ---
+
+  post "/agents/:from_agent/message-to/:to_agent" do
+    message = conn.body_params["message"]
+
+    if !message || message == "" do
+      json(conn, 400, %{error: "message is required"})
+    else
+      Shazam.AgentInbox.push_from_agent(to_agent, from_agent, message)
+
+      Shazam.API.EventBus.broadcast(%{
+        event: "agent_collaboration",
+        from: from_agent,
+        to: to_agent,
+        message: String.slice(message, 0..100)
+      })
+
+      json(conn, 200, %{status: "sent", from: from_agent, to: to_agent})
+    end
+  end
+
   # --- Workspaces list ---
 
   get "/workspaces" do
@@ -501,6 +688,177 @@ defmodule Shazam.API.Routes.MiscRoutes do
     updated = Enum.reject(history, fn ws -> ws["path"] == path end)
     Shazam.Store.save("workspace_history", %{"workspaces" => updated})
     json(conn, 200, %{status: "ok"})
+  end
+
+  # --- Config Import ---
+
+  post "/import" do
+    workspace = conn.body_params["workspace"] || Application.get_env(:shazam, :workspace, File.cwd!())
+    preview = conn.body_params["preview"] == true
+
+    case Shazam.ConfigImport.import_from_workspace(workspace) do
+      {:ok, yaml} ->
+        if preview do
+          json(conn, 200, %{status: "preview", yaml: yaml})
+        else
+          case Shazam.ConfigImport.import_and_save(workspace) do
+            {:ok, path, _yaml} -> json(conn, 200, %{status: "ok", path: path, yaml: yaml})
+            {:error, reason} -> json(conn, 500, %{error: inspect(reason)})
+          end
+        end
+
+      {:error, :no_configs_found} ->
+        json(conn, 404, %{error: "No IDE config directories found (.claude/, .gemini/, .cursor/, AGENTS.md)"})
+
+      {:error, reason} ->
+        json(conn, 500, %{error: inspect(reason)})
+    end
+  end
+
+  # --- Config Sync ---
+
+  post "/sync" do
+    company = conn.body_params["company"]
+    providers = conn.body_params["providers"]
+    preview = conn.body_params["preview"] == true
+
+    workspace = Application.get_env(:shazam, :workspace, File.cwd!())
+
+    {:ok, result} =
+      Shazam.ConfigSync.sync(
+        workspace,
+        company,
+        providers: providers || ["claude", "gemini", "cursor", "codex"],
+        preview: preview
+      )
+
+    Shazam.AuditLog.record("config_synced", %{company: company, files: result.count})
+
+    json(conn, 200, %{
+      status: "ok",
+      count: result.count,
+      providers: result.providers,
+      files: Enum.map(result.files, fn f -> %{path: f.path, type: f.type} end)
+    })
+  end
+
+  # POST /save-subagents — save subagents config directly to shazam.yaml + sync
+  post "/save-subagents" do
+    workspace = Shazam.Config.global_workspace()
+    subagents = conn.body_params["subagents"] || []
+    agent_assignments = conn.body_params["agent_assignments"] || %{}
+    company = conn.body_params["company"]
+
+    # Save global subagents section (also removes if empty)
+    if is_list(subagents) do
+      case Shazam.YamlWriter.update_subagents(workspace, subagents) do
+        {:ok, _} -> :ok
+        {:error, reason} ->
+          Logger.warning("[API] Failed to save subagents to yaml: #{inspect(reason)}")
+      end
+    end
+
+    # Save per-agent subagent assignments (also removes empty ones)
+    if is_map(agent_assignments) && map_size(agent_assignments) > 0 do
+      case Shazam.YamlWriter.update_agent_subagents(workspace, agent_assignments) do
+        {:ok, _} -> :ok
+        {:error, reason} ->
+          Logger.warning("[API] Failed to save agent assignments to yaml: #{inspect(reason)}")
+      end
+    end
+
+    # Auto-sync after saving
+    sync_result = if company do
+      case Shazam.ConfigSync.sync(workspace, company) do
+        {:ok, result} -> %{synced: true, files: result.count}
+        _ -> %{synced: false}
+      end
+    else
+      %{synced: false}
+    end
+
+    json(conn, 200, %{status: "ok", sync: sync_result})
+  end
+
+  get "/sync/status" do
+    workspace = Application.get_env(:shazam, :workspace, File.cwd!())
+    status = Shazam.ConfigSync.status(workspace)
+    json(conn, 200, status)
+  end
+
+  # --- Agent Performance Scores ---
+
+  get "/agents/:agent_name/score" do
+    score = Shazam.Metrics.agent_score(agent_name)
+    json(conn, 200, score)
+  end
+
+  get "/scores" do
+    scores = Shazam.Metrics.all_agent_scores()
+    json(conn, 200, %{scores: scores})
+  end
+
+  # --- Agent Subagents ---
+
+  get "/agents/:agent_name/subagents" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    if workspace do
+      # First check YAML config
+      {agents, _, _, _, _, _} = Shazam.ConfigSync.read_from_yaml(workspace)
+      agent = Enum.find(agents, fn a -> (a[:name] || a["name"]) == agent_name end)
+      yaml_subagents = if agent, do: agent[:subagents] || [], else: []
+
+      # Then check overrides (takes precedence)
+      override_path = Path.join(workspace, ".shazam/overrides.json")
+      override_subagents = case File.read(override_path) do
+        {:ok, content} ->
+          case Jason.decode(content) do
+            {:ok, %{"agents" => agents_map}} ->
+              case agents_map[agent_name] do
+                %{"subagents" => subs} when is_list(subs) -> subs
+                _ -> nil
+              end
+            _ -> nil
+          end
+        _ -> nil
+      end
+
+      subagents = override_subagents || yaml_subagents
+      json(conn, 200, %{agent: agent_name, subagents: subagents})
+    else
+      json(conn, 200, %{agent: agent_name, subagents: []})
+    end
+  end
+
+  put "/agents/:agent_name/subagents" do
+    workspace = Application.get_env(:shazam, :workspace, nil)
+    new_subagents = conn.body_params["subagents"] || []
+
+    if workspace do
+      # Store subagent assignments in overrides.json (same pattern as hierarchy overrides)
+      override_path = Path.join(workspace, ".shazam/overrides.json")
+      overrides = case File.read(override_path) do
+        {:ok, content} ->
+          case Jason.decode(content) do
+            {:ok, data} -> data
+            _ -> %{}
+          end
+        _ -> %{}
+      end
+
+      agent_overrides = overrides["agents"] || %{}
+      agent_data = agent_overrides[agent_name] || %{}
+      agent_data = Map.put(agent_data, "subagents", new_subagents)
+      agent_overrides = Map.put(agent_overrides, agent_name, agent_data)
+      overrides = Map.put(overrides, "agents", agent_overrides)
+
+      File.mkdir_p!(Path.dirname(override_path))
+      File.write!(override_path, Jason.encode!(overrides, pretty: true))
+
+      json(conn, 200, %{status: "ok", agent: agent_name, subagents: new_subagents})
+    else
+      json(conn, 400, %{error: "No workspace set"})
+    end
   end
 
   match _ do

@@ -160,8 +160,13 @@ defmodule Shazam.SkillMemory do
     # 2. Agent's own memory (always)
     agent_skill = Enum.find(all_skills, fn s -> s.path == "agents/#{agent_name}.md" end)
 
-    # 3. Project overview (always)
+    # 3. Project knowledge (always — overview, architecture, conventions)
     overview = Enum.find(all_skills, fn s -> s.path == "project/overview.md" end)
+    architecture = Enum.find(all_skills, fn s -> s.path == "project/architecture.md" end)
+    conventions = Enum.find(all_skills, fn s -> s.path == "project/conventions.md" end)
+
+    # 3b. Project rules (always — testing, git-workflow, etc.)
+    rule_skills = Enum.filter(all_skills, fn s -> String.starts_with?(s.path, "rules/") end)
 
     # 4. Domain-specific skills
     domain_skills = if domain do
@@ -194,8 +199,9 @@ defmodule Shazam.SkillMemory do
     end
 
     # 6. Merge, deduplicate, respect budget
-    [root, agent_skill, overview]
+    [root, agent_skill, overview, architecture, conventions]
     |> Enum.reject(&is_nil/1)
+    |> Enum.concat(rule_skills)
     |> Enum.concat(domain_skills)
     |> Enum.concat(role_skills)
     |> Enum.uniq_by(& &1.path)

@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.0.0 (2026-04-02) — Subagents & Intelligence Release
+
+### Major Features
+- **ConfigSync with Subagent Presets** — 12 specialized subagent templates (architect, executor, reviewer, explorer, debugger, test-writer, security-auditor, docs-writer, refactorer, planner, analyst, designer) synced to Claude Code, Gemini CLI, Cursor, and Codex
+- **Namespaced Subagents** — per-agent subagent assignments (pm--planner, senior_1--executor) with `memory: project` and agent-memory directory pre-creation
+- **ModelProxy** — maps model aliases (opus/sonnet/haiku) to provider-specific IDs across Claude, Gemini, Cursor, Codex
+- **Auto-Model Routing** — tasks auto-routed to optimal model by complexity (simple→Haiku, complex→Sonnet, critical→Opus)
+- **Smart Task Decomposition** — detects complex tasks and suggests PM decomposition before execution
+- **Agent-to-Agent Collaboration** — agents can message each other with @agent_name in output
+- **Memory Consolidation** — automatic 24h consolidation of agent context to reduce token usage
+- **Webhook Notifications** — HTTP webhooks with HMAC-SHA256 signing for Slack/Discord
+- **Audit Log** — records all important actions (task CRUD, project start/stop, config sync)
+- **Context Window Monitor** — tracks input/output tokens per agent with warning at 80%
+- **Agent Performance Scoring** — grade A-F per agent with actionable suggestions
+- **Task Deduplication** — prevents duplicate tasks (same title + agent + active status)
+- **Rate Limiting** — budget check before task execution, warning at 90%, block at 100%
+- **Plans REST API** — create, edit, refine, approve plans without creating tasks until approval
+- **ConfigImport** — import existing .claude/.gemini/.cursor configs into shazam.yaml
+- **Shazam Doctor** — 11 system health checks via GET /api/doctor
+- **YAML Writer** — direct shazam.yaml modification from dashboard (no copy-paste)
+- **Multi-tenant Isolation** — sessions namespaced by company, per-company workspace
+
+### Core Improvements
+- **Source of Truth Hierarchy** — YAML > Store > GenServer clearly documented and enforced
+- **Shazam.Config** — centralized workspace + budget resolution
+- **Silent rescue blocks fixed** — ~70 catch blocks now log via Logger in 21 files
+- **TaskBoard standardized** — all functions return {:ok, result} or {:error, reason}
+- **Builder consolidated** — build_agent_configs delegates to build_agents_from_raw
+- **unblock_dependents implemented** — queries + broadcasts task_unblocked events
+- **RalphLoop refresh_agents** — Company notifies RalphLoop on agent updates
+- **SessionPool rewritten** — no idle killing, compact instead of reset, grace period reaper
+- **Task reimport on project start** — tasks loaded from workspace markdown files
+- **Tool event parsing fixed** — parse_tool_content handles maps and strings
+- **Prompt injection improved** — project memories, rules, decisions injected; subordinates for any agent with reports
+
+### Bug Fixes
+- Agent edit no longer wipes other agents (merge partial updates)
+- Budget 0/nil = unlimited everywhere
+- Tasks load correctly after daemon restart
+- cli_exit 143 fixed (reaper grace period + child process tracking)
+- parse_agents includes all fields (model, tools, skills, modules, system_prompt)
+
+### Tests
+- 680+ tests across all modules
+- Coverage improved from 19% to 35%+
+
+### Removed
+- Nix support (flake.nix, setup.sh Nix detection)
+
 ## v0.5.3 (2026-03-25)
 
 ### Bug Fixes

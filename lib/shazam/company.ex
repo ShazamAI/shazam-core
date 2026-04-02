@@ -1,7 +1,19 @@
 defmodule Shazam.Company do
   @moduledoc """
-  Defines and manages a "company" of agents.
-  Maintains the org chart, mission, and coordinates the agent lifecycle.
+  Company GenServer — manages a running agent company.
+
+  ## Data Hierarchy (Source of Truth)
+
+  1. **shazam.yaml** — authoritative for agent STRUCTURE (roles, tools, model, budget)
+     - Never written by Shazam. User's config, committed to git.
+  2. **Store JSON** (`~/.shazam/company:Name.json`) — runtime state backup
+     - Written on agent updates. Includes all fields for crash recovery.
+  3. **GenServer state** — authoritative while running
+     - Built from yaml on startup. Updated via API. Backed up to Store.
+
+  On startup: yaml → GenServer (Store JSON NOT used — yaml is source of truth)
+  On update: GenServer → Store JSON (yaml unchanged)
+  On restart: yaml → GenServer (fresh, authoritative)
   """
 
   use GenServer
@@ -17,7 +29,9 @@ defmodule Shazam.Company do
     agents: [],
     status: :stopped,
     # Per-domain config: %{"Desenvolvimento" => %{"allowed_paths" => ["src/", "lib/"]}, ...}
-    domain_config: %{}
+    domain_config: %{},
+    # Per-company workspace path (overrides global workspace for isolation)
+    workspace: nil
   ]
 
   # --- Public API ---
@@ -94,6 +108,11 @@ defmodule Shazam.Company do
     GenServer.call(via(company_name), :org_chart, @call_timeout)
   end
 
+  @doc "Returns the workspace path for this company."
+  def get_workspace(company_name) do
+    GenServer.call(via(company_name), :get_workspace, @call_timeout)
+  end
+
   @doc "Gets domain config map."
   def get_domain_config(company_name) do
     GenServer.call(via(company_name), :get_domain_config, @call_timeout)
@@ -116,14 +135,16 @@ defmodule Shazam.Company do
           name: config.name,
           mission: config.mission,
           agents: agents,
-          domain_config: config[:domain_config] || %{}
+          domain_config: config[:domain_config] || %{},
+          workspace: config[:workspace] || Shazam.Config.global_workspace()
         }
 
         # Attach to RalphLoop after init returns
         send(self(), :attach_ralph_loop)
 
-        # Persist company config
-        Builder.save_company(config)
+        # NOTE: We no longer call Builder.save_company(config) here.
+        # shazam.yaml is the source of truth for structure. Store JSON is only
+        # written on runtime updates (update_agents, set_domain_paths).
 
         Logger.info("[Company:#{state.name}] Company started | Mission: #{state.mission}")
         Logger.info("[Company:#{state.name}] Registered agents: #{Enum.map_join(state.agents, ", ", & &1.name)}")
@@ -170,7 +191,9 @@ defmodule Shazam.Company do
       existing_tasks = try do
         Shazam.TaskBoard.list(%{company: state.name})
       rescue
-        _ -> []
+        e ->
+          Logger.warning("[Company:#{state.name}] Failed to list tasks for onboarding check: #{Exception.message(e)}")
+          []
       end
 
       has_onboarding = Enum.any?(existing_tasks, fn t ->
@@ -228,7 +251,8 @@ defmodule Shazam.Company do
       mission: state.mission,
       status: state.status,
       agent_count: length(state.agents),
-      agents: Enum.map(state.agents, &%{name: &1.name, role: &1.role, supervisor: &1.supervisor})
+      agents: Enum.map(state.agents, &%{name: &1.name, role: &1.role, supervisor: &1.supervisor}),
+      workspace: state.workspace
     }
 
     {:reply, info, state}
@@ -244,7 +268,9 @@ defmodule Shazam.Company do
         metrics = try do
           Shazam.Metrics.get_agent(a.name) || %{}
         catch
-          _, _ -> %{}
+          kind, reason ->
+            Logger.debug("[Company] Failed to get metrics for #{a.name}: #{inspect(kind)}: #{inspect(reason)}")
+            %{}
         end
 
         %{
@@ -316,7 +342,9 @@ defmodule Shazam.Company do
       try do
         Shazam.TaskBoard.list(%{})
       rescue
-        _ -> []
+        e ->
+          Logger.warning("[Company:#{state.name}] Failed to list tasks for agent statuses: #{Exception.message(e)}")
+          []
       end
 
     statuses =
@@ -326,7 +354,9 @@ defmodule Shazam.Company do
           try do
             Shazam.Metrics.get_agent(agent.name) || %{}
           catch
-            _, _ -> %{}
+            kind, reason ->
+              Logger.debug("[Company] Failed to get metrics for #{agent.name}: #{inspect(kind)}: #{inspect(reason)}")
+              %{}
           end
 
         # Count tasks by status for this agent
@@ -337,8 +367,8 @@ defmodule Shazam.Company do
         pending = Enum.count(agent_tasks, fn t -> t.status == :pending end)
 
         tokens_used = metrics[:total_tokens] || 0
-        budget = agent.budget || 0
-        remaining = max(budget - tokens_used, 0)
+        budget = agent.budget
+        remaining = if Shazam.Config.unlimited_budget?(budget), do: nil, else: max(budget - tokens_used, 0)
 
         %{
           name: agent.name,
@@ -366,6 +396,10 @@ defmodule Shazam.Company do
   def handle_call(:org_chart, _from, state) do
     chart = build_org_chart(state.agents)
     {:reply, chart, state}
+  end
+
+  def handle_call(:get_workspace, _from, state) do
+    {:reply, state.workspace, state}
   end
 
   def handle_call(:get_domain_config, _from, state) do
@@ -428,13 +462,43 @@ defmodule Shazam.Company do
   end
 
   defp handle_update_agents(agents_raw, state) do
-    new_agents = Builder.build_agents_from_raw(agents_raw, state.name)
+    # Merge incoming data with existing agents to prevent field loss.
+    # If an incoming entry matches an existing agent by name and is NOT already
+    # a full AgentWorker struct, merge fields so that unset keys (tools, model,
+    # etc.) are preserved from the current state instead of becoming nil.
+    merged_raw = Enum.map(agents_raw, fn raw ->
+      if is_struct(raw, Shazam.AgentWorker) do
+        raw
+      else
+        raw_name = raw[:name] || raw["name"]
+        existing = Enum.find(state.agents, fn a -> a.name == raw_name end)
+
+        if existing do
+          Builder.merge_with_existing(raw, existing)
+        else
+          raw
+        end
+      end
+    end)
+
+    new_agents = Builder.build_agents_from_raw(merged_raw, state.name)
 
     case Hierarchy.validate_no_cycles(new_agents) do
       :ok ->
         new_state = %{state | agents: new_agents}
         Builder.save_company_state(new_state)
+
+        # Notify RalphLoop to refresh agent cache
+        try do
+          Shazam.RalphLoop.refresh_agents(state.name)
+        catch
+          kind, reason ->
+            Logger.debug("[Company:#{state.name}] RalphLoop refresh skipped: #{inspect(kind)}: #{inspect(reason)}")
+            :ok
+        end
+
         Logger.info("[Company:#{state.name}] Agents updated: #{Enum.map_join(new_agents, ", ", & &1.name)}")
+        Shazam.AuditLog.record("agents_updated", %{company: state.name, count: length(new_agents)})
         {:reply, :ok, new_state}
 
       {:error, {:cycle_detected, names}} ->

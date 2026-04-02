@@ -99,6 +99,11 @@ defmodule Shazam.RalphLoop do
     GenServer.call(via(company_name), :pause_all, @call_timeout)
   end
 
+  @doc "Refresh the cached agent list from Company. Called when agents are updated."
+  def refresh_agents(company_name) do
+    GenServer.cast(via(company_name), :refresh_agents)
+  end
+
   @doc "Stops the RalphLoop for a company."
   def stop(company_name) do
     case Registry.lookup(Shazam.RalphLoopRegistry, company_name) do
@@ -163,7 +168,7 @@ defmodule Shazam.RalphLoop do
       {info, running} ->
         Process.demonitor(info.ref, [:flush])
         Process.exit(info.pid, :kill)
-        Shazam.SessionPool.kill(info.agent_name)
+        Shazam.SessionPool.kill(state.company_name, info.agent_name)
         TaskBoard.fail(task_id, "Killed by user")
         Logger.info("[RalphLoop:#{state.company_name}] Killed task #{task_id} (#{info.agent_name})")
         Shazam.API.EventBus.broadcast(%{event: "task_killed", task_id: task_id, agent: info.agent_name})
@@ -260,6 +265,12 @@ defmodule Shazam.RalphLoop do
   end
 
   @impl true
+  def handle_cast(:refresh_agents, state) do
+    Logger.info("[RalphLoop:#{state.company_name}] Refreshing agent cache")
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(:poll, %{paused: true} = state) do
     schedule_poll(state.poll_interval)
     {:noreply, state}
@@ -273,8 +284,12 @@ defmodule Shazam.RalphLoop do
       Shazam.API.EventBus.broadcast(%{event: "resource_alert", type: "memory", value: memory_mb})
     end
 
-    # Disk space check for .shazam directory
-    workspace = Application.get_env(:shazam, :workspace, File.cwd!())
+    # Disk space check for .shazam directory (use per-company workspace)
+    workspace = try do
+      Shazam.Company.get_workspace(state.company_name)
+    catch
+      _, _ -> Shazam.Config.global_workspace()
+    end
     shazam_dir = Path.join(workspace, ".shazam")
     try do
       case System.cmd("df", ["-k", shazam_dir], stderr_to_stdout: true) do
@@ -297,7 +312,9 @@ defmodule Shazam.RalphLoop do
         _ -> :ok
       end
     catch
-      _, _ -> :ok
+      kind, reason ->
+        Logger.debug("[RalphLoop] Disk space check failed: #{inspect(kind)}: #{inspect(reason)}")
+        :ok
     end
 
     state = maybe_pick_tasks(state)
@@ -396,7 +413,9 @@ defmodule Shazam.RalphLoop do
   end
 
   def handle_info({:retry_task, task_id}, state) do
-    Logger.info("[RalphLoop:#{state.company_name}] Retry timer fired for task #{task_id}")
+    # Task was already set back to :pending by TaskBoard.retry().
+    # The next poll() cycle will pick it up for execution.
+    Logger.info("[RalphLoop:#{state.company_name}] Retry timer fired for task #{task_id} — will be picked up in next poll")
     {:noreply, state}
   end
 
@@ -457,7 +476,9 @@ defmodule Shazam.RalphLoop do
           end
         end
       catch
-        _, _ -> nil
+        kind, reason ->
+          Logger.debug("[RalphLoop] Failed to auto-assign task #{task.id}: #{inspect(kind)}: #{inspect(reason)}")
+          nil
       end
 
       if top_agent do
@@ -465,7 +486,9 @@ defmodule Shazam.RalphLoop do
         try do
           TaskBoard.reassign(task.id, top_agent)
         catch
-          _, _ -> :ok
+          kind, reason ->
+            Logger.warning("[RalphLoop] Failed to reassign task #{task.id} to #{top_agent}: #{inspect(kind)}: #{inspect(reason)}")
+            :ok
         end
         %{task | assigned_to: top_agent}
       else
@@ -515,9 +538,13 @@ defmodule Shazam.RalphLoop do
     agent_profile = try do
       TaskScheduler.resolve_agent_profile(state.company_name, task.assigned_to)
     rescue
-      _ -> nil
+      e ->
+        Logger.warning("[RalphLoop:#{state.company_name}] Failed to resolve agent profile for '#{task.assigned_to}': #{Exception.message(e)}")
+        nil
     catch
-      _, _ -> nil
+      kind, reason ->
+        Logger.warning("[RalphLoop:#{state.company_name}] Failed to resolve agent profile for '#{task.assigned_to}': #{inspect(kind)}: #{inspect(reason)}")
+        nil
     end
 
     unless agent_profile do
@@ -531,50 +558,62 @@ defmodule Shazam.RalphLoop do
       state
     else
       # Check budget before executing (nil or 0 = unlimited)
-      tokens_used = get_agent_tokens(agent_profile.name)
-      budget = agent_profile.budget
-      if budget && budget > 0 && tokens_used >= budget do
-        Logger.warning("[RalphLoop:#{state.company_name}] Agent '#{agent_profile.name}' exceeded budget")
-        TaskBoard.fail(task.id, "Agent budget exceeded (#{tokens_used}/#{budget} tokens)")
-        Shazam.API.EventBus.broadcast(%{
-          event: "task_failed",
-          task_id: task.id,
-          agent: agent_profile.name,
-          reason: "Budget exceeded"
-        })
-        state
-      else
-      case TaskBoard.checkout(task.id, task.assigned_to) do
-        {:ok, checked_task} ->
-          Logger.info("[RalphLoop:#{state.company_name}] Executing task #{task.id} with #{task.assigned_to}")
-
+      case Shazam.Metrics.check_budget(agent_profile.name) do
+        {:exceeded, used, budget} ->
+          Logger.warning("[RalphLoop:#{state.company_name}] Agent '#{agent_profile.name}' exceeded budget: #{used}/#{budget} tokens")
+          TaskBoard.fail(task.id, "Agent budget exceeded (#{used}/#{budget} tokens)")
           Shazam.API.EventBus.broadcast(%{
-            event: "task_started",
+            event: "agent_budget_exceeded",
+            agent: agent_profile.name,
             task_id: task.id,
-            agent: task.assigned_to,
-            company: state.company_name
+            tokens_used: used,
+            budget: budget
           })
-
-          loop_pid = self()
-
-          {pid, ref} = spawn_monitor(fn ->
-            result = TaskExecutor.run_agent_task(agent_profile, checked_task, state.company_name)
-            send(loop_pid, {:task_done, task.id, result})
-          end)
-
-          running_info = %{
-            pid: pid,
-            ref: ref,
-            agent_name: task.assigned_to,
-            started_at: DateTime.utc_now()
-          }
-
-          %{state | running: Map.put(state.running, task.id, running_info)}
-
-        {:error, reason} ->
-          Logger.debug("[RalphLoop:#{state.company_name}] Could not checkout #{task.id}: #{inspect(reason)}")
           state
-      end
+
+        budget_status ->
+          if match?({:warning, _, _}, budget_status) do
+            {:warning, used, budget} = budget_status
+            Logger.info("[RalphLoop:#{state.company_name}] Agent '#{agent_profile.name}' at 90%+ budget: #{used}/#{budget} tokens")
+            Shazam.API.EventBus.broadcast(%{
+              event: "agent_budget_warning",
+              agent: agent_profile.name,
+              tokens_used: used,
+              budget: budget
+            })
+          end
+
+          case TaskBoard.checkout(task.id, task.assigned_to) do
+            {:ok, checked_task} ->
+              Logger.info("[RalphLoop:#{state.company_name}] Executing task #{task.id} with #{task.assigned_to}")
+
+              Shazam.API.EventBus.broadcast(%{
+                event: "task_started",
+                task_id: task.id,
+                agent: task.assigned_to,
+                company: state.company_name
+              })
+
+              loop_pid = self()
+
+              {pid, ref} = spawn_monitor(fn ->
+                result = TaskExecutor.run_agent_task(agent_profile, checked_task, state.company_name)
+                send(loop_pid, {:task_done, task.id, result})
+              end)
+
+              running_info = %{
+                pid: pid,
+                ref: ref,
+                agent_name: task.assigned_to,
+                started_at: DateTime.utc_now()
+              }
+
+              %{state | running: Map.put(state.running, task.id, running_info)}
+
+            {:error, reason} ->
+              Logger.debug("[RalphLoop:#{state.company_name}] Could not checkout #{task.id}: #{inspect(reason)}")
+              state
+          end
       end
     end
   end
@@ -589,6 +628,7 @@ defmodule Shazam.RalphLoop do
             # Pipeline fully done — normal completion flow
             Logger.info("[RalphLoop:#{state.company_name}] Task #{task_id} pipeline completed by #{agent_name}")
             Shazam.FileLogger.info("Task #{task_id} pipeline completed by #{agent_name}")
+            SubtaskParser.check_for_collaboration(output, agent_name)
             SubtaskParser.maybe_create_subtasks(task_id, agent_name, output, state.company_name, state.auto_approve)
             unblock_dependents(task_id)
             Shazam.ContextManager.capture(agent_name, task, output, touched_files)
@@ -633,7 +673,9 @@ defmodule Shazam.RalphLoop do
         # No pipeline — standard completion
         TaskBoard.complete(task_id, output)
         Logger.info("[RalphLoop:#{state.company_name}] Task #{task_id} completed by #{agent_name}")
+        Shazam.AuditLog.record("task_completed", %{task_id: task_id, agent: agent_name, company: state.company_name})
         Shazam.FileLogger.info("Task #{task_id} completed by #{agent_name}")
+        SubtaskParser.check_for_collaboration(output, agent_name)
         SubtaskParser.maybe_create_subtasks(task_id, agent_name, output, state.company_name, state.auto_approve)
         unblock_dependents(task_id)
 
@@ -718,6 +760,7 @@ defmodule Shazam.RalphLoop do
           else
             TaskBoard.fail(task_id, reason)
             Logger.warning("[RalphLoop:#{state.company_name}] Task #{task_id} failed permanently")
+            Shazam.AuditLog.record("task_failed", %{task_id: task_id, agent: agent_name, error: inspect(reason, limit: 200)})
             Shazam.API.EventBus.broadcast(%{
               event: "task_failed",
               task_id: task_id,
@@ -731,6 +774,7 @@ defmodule Shazam.RalphLoop do
       end
     else
       TaskBoard.fail(task_id, reason)
+      Shazam.AuditLog.record("task_failed", %{task_id: task_id, agent: agent_name, error: inspect(reason, limit: 200)})
       Shazam.API.EventBus.broadcast(%{
         event: "task_failed",
         task_id: task_id,
@@ -741,7 +785,26 @@ defmodule Shazam.RalphLoop do
   end
 
   defp unblock_dependents(completed_task_id) do
-    Logger.debug("[RalphLoop] Checking dependents of #{completed_task_id}")
+    # Find tasks that depend on the completed task and unblock them
+    case Shazam.TaskBoard.list(%{}) do
+      tasks when is_list(tasks) ->
+        tasks
+        |> Enum.filter(fn t ->
+          t.depends_on == completed_task_id && t.status in [:pending, :awaiting_approval]
+        end)
+        |> Enum.each(fn dependent ->
+          Logger.info("[RalphLoop] Unblocked dependent task #{dependent.id} (was waiting on #{completed_task_id})")
+          # Broadcast event
+          Shazam.API.EventBus.broadcast(%{
+            event: "task_unblocked",
+            task_id: dependent.id,
+            unblocked_by: completed_task_id
+          })
+        end)
+      _ -> :ok
+    end
+  rescue
+    e -> Logger.warning("[RalphLoop] Failed to check dependents: #{Exception.message(e)}")
   end
 
   defp schedule_poll(interval) do
@@ -749,14 +812,4 @@ defmodule Shazam.RalphLoop do
   end
 
   defp via(company_name), do: {:via, Registry, {Shazam.RalphLoopRegistry, company_name}}
-
-  defp get_agent_tokens(agent_name) do
-    case Shazam.Metrics.get_agent(agent_name) do
-      %{total_tokens: tokens} -> tokens
-      _ -> 0
-    end
-  catch
-    _, _ -> 0
-  end
-
 end

@@ -4,17 +4,22 @@ defmodule Shazam.ProjectRegistryTest do
   @moduletag :project_registry
 
   setup do
+    # Ensure ProjectRegistry GenServer is running (may have been killed by other tests)
+    unless GenServer.whereis(Shazam.ProjectRegistry), do: Shazam.ProjectRegistry.start_link([])
+
     # Get initial state and restore after test
     initial_projects = Shazam.ProjectRegistry.list()
 
     on_exit(fn ->
-      # Clean up any test projects
-      current = Shazam.ProjectRegistry.list()
-      Enum.each(current, fn p ->
-        if String.starts_with?(p.name, "test_") do
-          Shazam.ProjectRegistry.remove(p.name)
-        end
-      end)
+      # Clean up any test projects (only if GenServer is still alive)
+      if GenServer.whereis(Shazam.ProjectRegistry) do
+        current = Shazam.ProjectRegistry.list()
+        Enum.each(current, fn p ->
+          if String.starts_with?(p.name, "test_") do
+            Shazam.ProjectRegistry.remove(p.name)
+          end
+        end)
+      end
     end)
 
     %{initial_projects: initial_projects}

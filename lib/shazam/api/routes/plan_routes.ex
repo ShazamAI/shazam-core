@@ -2,6 +2,7 @@ defmodule Shazam.API.Routes.PlanRoutes do
   @moduledoc "REST endpoints for the Plans system."
 
   use Plug.Router
+  require Logger
   import Shazam.API.Helpers
 
   plug :match
@@ -22,29 +23,17 @@ defmodule Shazam.API.Routes.PlanRoutes do
   end
 
   # POST /plans — create a new plan (generates prompt, creates PM task)
-  # Body: { description: string, company: string }
+  # Body: { description: string }
   post "/" do
     description = conn.body_params["description"]
-    company = conn.body_params["company"]
 
     if !description || description == "" do
       json(conn, 400, %{error: "description is required"})
     else
       plan_id = Shazam.PlanManager.next_id()
-      prompt = Shazam.PlanManager.build_plan_prompt(description)
 
-      # Find PM agent
-      pm_name = try do
-        agents = Shazam.Company.get_agents(company)
-        case Enum.find(agents, fn a -> a.supervisor == nil and String.contains?(String.downcase(a.role), "manager") end) do
-          nil -> "pm"
-          agent -> agent.name
-        end
-      catch
-        _, _ -> "pm"
-      end
-
-      # Save an initial draft plan file so it appears in the list immediately
+      # Save draft plan — NO task created yet.
+      # Tasks are only created when the user approves the plan.
       draft_plan = %{
         id: plan_id,
         title: String.slice(description, 0..80),
@@ -58,17 +47,7 @@ defmodule Shazam.API.Routes.PlanRoutes do
       Shazam.PlanManager.ensure_dir()
       Shazam.PlanManager.save_plan(draft_plan)
 
-      # Create planning task for PM
-      case Shazam.TaskBoard.create(%{
-        title: "Create plan: #{String.slice(description, 0..80)}",
-        assigned_to: pm_name,
-        created_by: "human",
-        company: company,
-        description: prompt <> "\n\nPlan ID: #{plan_id}"
-      }) do
-        {:ok, task} -> json(conn, 201, %{plan_id: plan_id, task_id: task.id, status: "draft"})
-        {:error, reason} -> json(conn, 500, %{error: inspect(reason)})
-      end
+      json(conn, 201, %{plan_id: plan_id, status: "draft"})
     end
   end
 
@@ -113,51 +92,23 @@ defmodule Shazam.API.Routes.PlanRoutes do
     json(conn, 200, %{status: "ok"})
   end
 
-  # POST /plans/:plan_id/refine — ask AI to refine the plan
+  # POST /plans/:plan_id/refine — refine plan with AI feedback (no task created)
+  # Body: { feedback: string }
+  # The feedback is appended to the plan summary for now.
+  # In the future, this could call Claude directly to rewrite the plan.
   post "/:plan_id/refine" do
-    company = conn.body_params["company"]
     feedback = conn.body_params["feedback"] || ""
 
     case Shazam.PlanManager.read_plan(plan_id) do
       {:ok, plan} ->
-        # Find PM
-        pm_name = try do
-          agents = Shazam.Company.get_agents(company)
-          case Enum.find(agents, fn a -> a.supervisor == nil and String.contains?(String.downcase(a.role), "manager") end) do
-            nil -> "pm"
-            agent -> agent.name
-          end
-        catch
-          _, _ -> "pm"
-        end
+        # Append feedback to summary
+        current_summary = plan[:summary] || ""
+        updated_summary = current_summary <> "\n\n---\n**Refinement feedback:**\n" <> feedback
 
-        # Create refinement task
-        refine_prompt = """
-        Review and refine this existing plan:
+        updated_plan = %{plan | summary: updated_summary}
+        Shazam.PlanManager.save_plan(updated_plan)
 
-        Title: #{plan.title}
-        Summary: #{plan[:summary] || ""}
-
-        Current tasks:
-        #{Enum.map_join(plan[:tasks] || [], "\n", fn t -> "- #{t[:title]} → #{t[:assigned_to]}" end)}
-
-        User feedback for refinement:
-        #{feedback}
-
-        Output the complete refined plan in the same JSON format (title, summary, architecture, phases, risks).
-        Keep the same Plan ID: #{plan_id}
-        """
-
-        case Shazam.TaskBoard.create(%{
-          title: "Refine plan: #{plan.title}",
-          assigned_to: pm_name,
-          created_by: "human",
-          company: company,
-          description: refine_prompt
-        }) do
-          {:ok, task} -> json(conn, 200, %{status: "refining", task_id: task.id, plan_id: plan_id})
-          {:error, reason} -> json(conn, 500, %{error: inspect(reason)})
-        end
+        json(conn, 200, %{status: "refined", plan_id: plan_id, plan: updated_plan})
       {:error, :not_found} -> json(conn, 404, %{error: "Plan not found"})
     end
   end

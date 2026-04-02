@@ -179,9 +179,13 @@ defmodule Shazam.PluginManager do
       apply(plugin, event, args)
     end
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[PluginManager] Plugin #{inspect(plugin)} failed on #{event}: #{Exception.message(e)}")
+      :ok
   catch
-    _, _ -> :ok
+    kind, reason ->
+      Logger.warning("[PluginManager] Plugin #{inspect(plugin)} failed on #{event}: #{inspect(kind)}: #{inspect(reason)}")
+      :ok
   end
 
   defp normalize(name) do
@@ -245,7 +249,9 @@ defmodule Shazam.PluginManager do
           []
         end
       catch
-        _, _ -> []
+        kind, reason ->
+          Logger.debug("[PluginManager] Failed to get agents for context: #{inspect(kind)}: #{inspect(reason)}")
+          []
       end
 
     tasks =
@@ -260,7 +266,9 @@ defmodule Shazam.PluginManager do
           []
         end
       catch
-        _, _ -> []
+        kind, reason ->
+          Logger.debug("[PluginManager] Failed to get tasks for context: #{inspect(kind)}: #{inspect(reason)}")
+          []
       end
 
     %{

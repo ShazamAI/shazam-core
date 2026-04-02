@@ -18,6 +18,16 @@ defmodule Shazam.AgentInbox do
     GenServer.call(__MODULE__, {:push, agent_name, message})
   end
 
+  @doc "Push a message from one agent to another."
+  def push_from_agent(to_agent, from_agent, message) do
+    GenServer.cast(__MODULE__, {:push_from_agent, to_agent, %{
+      message: message,
+      from: from_agent,
+      type: :agent_message,
+      timestamp: DateTime.utc_now()
+    }})
+  end
+
   @doc "Pop the next pending message for the agent. Returns nil if empty."
   def pop(agent_name) do
     GenServer.call(__MODULE__, {:pop, agent_name})
@@ -43,18 +53,39 @@ defmodule Shazam.AgentInbox do
   end
 
   defp do_execute(agent_name, messages) do
+    # Separate agent messages from user messages for prompt context
+    {agent_msgs, user_msgs} = Enum.split_with(messages, fn m -> Map.get(m, :type) == :agent_message end)
+
     # Combine all pending messages into one prompt
     combined = messages
-      |> Enum.map(fn %{message: msg} -> msg end)
+      |> Enum.map(fn msg ->
+        case Map.get(msg, :type) do
+          :agent_message -> "[From agent '#{msg.from}']: #{msg.message}"
+          _ -> msg.message
+        end
+      end)
       |> Enum.join("\n\n---\n\n")
 
-    prompt = """
-    [User Message — sent directly via terminal]
+    has_agent_msgs = agent_msgs != []
 
-    #{combined}
+    prompt = if has_agent_msgs and user_msgs == [] do
+      """
+      [Agent Collaboration Message]
 
-    Respond to the user's message above. If it contains instructions or hints for your current work, follow them.
-    """
+      #{combined}
+
+      Another agent has sent you a message. Read it carefully and respond or act on it as appropriate.
+      If it contains a request for help, provide the information or assistance needed.
+      """
+    else
+      """
+      [User Message — sent directly via terminal]
+
+      #{combined}
+
+      Respond to the user's message above. If it contains instructions or hints for your current work, follow them.
+      """
+    end
 
     Logger.info("[AgentInbox] Executing #{length(messages)} pending message(s) for '#{agent_name}'")
 
@@ -89,10 +120,10 @@ defmodule Shazam.AgentInbox do
       |> maybe_add_opt(:model, agent_profile.model, agent_profile.model != nil and agent_profile.model != "")
       |> maybe_add_opt(:cwd, workspace, workspace != nil)
 
-      case Shazam.SessionPool.checkout(agent_name, session_opts) do
+      case Shazam.SessionPool.checkout(company_name, agent_name, session_opts) do
         {:ok, session_pid, _session_type} ->
           result = Shazam.Orchestrator.execute_on_session(session_pid, agent_name, prompt)
-          Shazam.SessionPool.checkin(agent_name)
+          Shazam.SessionPool.checkin(company_name, agent_name)
 
           case result do
             {:ok, _text, _files} ->
@@ -131,6 +162,14 @@ defmodule Shazam.AgentInbox do
   @impl true
   def init(_opts) do
     {:ok, %{queues: %{}}}
+  end
+
+  @impl true
+  def handle_cast({:push_from_agent, agent_name, entry}, state) do
+    queue = Map.get(state.queues, agent_name, :queue.new())
+    queue = :queue.in(entry, queue)
+    Logger.info("[AgentInbox] Agent '#{entry.from}' sent message to '#{agent_name}' (#{:queue.len(queue)} pending)")
+    {:noreply, %{state | queues: Map.put(state.queues, agent_name, queue)}}
   end
 
   @impl true

@@ -5,6 +5,7 @@ defmodule Shazam.Daemon do
   """
 
   use GenServer
+  require Logger
 
   @pid_file_path "~/.shazam/daemon.pid"
 
@@ -58,7 +59,9 @@ defmodule Shazam.Daemon do
     companies = try do
       Registry.select(Shazam.CompanyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
     catch
-      _, _ -> []
+      kind, reason ->
+        Logger.debug("[Daemon] Failed to list companies: #{inspect(kind)}: #{inspect(reason)}")
+        []
     end
 
     {:reply, %{

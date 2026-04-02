@@ -83,11 +83,15 @@ defmodule Shazam.CircuitBreaker do
             Shazam.RalphLoop.pause(company_name)
             Logger.warning("[CircuitBreaker] Auto-paused RalphLoop for #{company_name}")
           catch
-            _, _ -> :ok
+            kind, reason ->
+              Logger.warning("[CircuitBreaker] Failed to pause RalphLoop for #{company_name}: #{inspect(kind)}: #{inspect(reason)}")
+              :ok
           end
         end)
       catch
-        _, _ -> :ok
+        kind, reason ->
+          Logger.warning("[CircuitBreaker] Failed to enumerate RalphLoops for auto-pause: #{inspect(kind)}: #{inspect(reason)}")
+          :ok
       end
 
       {:noreply, %{state | tripped: true}}

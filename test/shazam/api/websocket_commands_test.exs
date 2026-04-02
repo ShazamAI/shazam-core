@@ -6,6 +6,12 @@ defmodule Shazam.API.WebSocketCommandsTest do
   @moduletag :websocket_commands
 
   setup do
+    # Ensure required GenServers are running (may have been killed by other tests)
+    unless GenServer.whereis(Shazam.TaskBoard), do: Shazam.TaskBoard.start_link([])
+    unless GenServer.whereis(Shazam.API.EventBus), do: Shazam.API.EventBus.start_link([])
+    unless GenServer.whereis(Shazam.Metrics), do: Shazam.Metrics.start_link([])
+    unless Process.whereis(Shazam.RalphLoopRegistry), do: Registry.start_link(keys: :unique, name: Shazam.RalphLoopRegistry)
+
     # Clean up tasks before each test
     Shazam.TaskBoard.clear_all()
 

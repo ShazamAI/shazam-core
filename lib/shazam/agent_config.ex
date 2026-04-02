@@ -5,7 +5,7 @@ defmodule Shazam.AgentConfig do
 
   @doc "Returns the agents config directory."
   def agents_dir do
-    workspace = Application.get_env(:shazam, :workspace, File.cwd!())
+    workspace = Shazam.Config.global_workspace()
     Path.join(workspace, @agents_dir)
   end
 
@@ -112,7 +112,7 @@ defmodule Shazam.AgentConfig do
   defp render_agent_md(_name, config) do
     role = config[:role] || Map.get(config, :role, "Agent")
     model = config[:model] || Map.get(config, :model, nil)
-    budget = config[:budget] || Map.get(config, :budget, 100_000)
+    budget = Shazam.Config.normalize_budget(config[:budget] || Map.get(config, :budget))
     tools = config[:tools] || Map.get(config, :tools, [])
     system_prompt = config[:system_prompt] || Map.get(config, :system_prompt, "You are a #{role}.")
 
