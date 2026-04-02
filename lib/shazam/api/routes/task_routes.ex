@@ -83,6 +83,21 @@ defmodule Shazam.API.Routes.TaskRoutes do
     end
   end
 
+  # POST /tasks/approve-all — approve all awaiting tasks
+  post "/approve-all" do
+    tasks = Shazam.TaskBoard.list(%{})
+    awaiting = Enum.filter(tasks, fn t -> t.status == :awaiting_approval end)
+
+    approved = Enum.reduce(awaiting, 0, fn task, count ->
+      case Shazam.TaskBoard.approve(task.id) do
+        {:ok, _} -> count + 1
+        _ -> count
+      end
+    end)
+
+    json(conn, 200, %{approved: approved})
+  end
+
   # POST /tasks/analyze — analyze complexity without creating
   post "/analyze" do
     analysis = Shazam.TaskComplexity.analyze(conn.body_params)
